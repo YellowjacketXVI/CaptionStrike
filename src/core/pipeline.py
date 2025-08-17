@@ -60,7 +60,7 @@ class ProcessingPipeline:
         if self.qwen_reasoner is None:
             model_name = config.get("models.reasoning.model", "Qwen/Qwen2.5-VL-7B-Instruct")
             try:
-                self.qwen_reasoner = QwenVLReasoner(model_name)
+                self.qwen_reasoner = QwenVLReasoner(model_name, cache_dir=self.models_dir)
             except Exception as e:
                 logger.warning(f"Failed to load Qwen reasoner: {e}")
                 return None
