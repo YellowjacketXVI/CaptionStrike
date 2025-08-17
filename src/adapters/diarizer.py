@@ -15,7 +15,12 @@ import numpy as np
 from pydub import AudioSegment
 from pyannote.audio import Pipeline
 from pyannote.core import Annotation, Segment
-import faster_whisper
+
+try:
+    import faster_whisper
+    FASTER_WHISPER_AVAILABLE = True
+except ImportError:
+    FASTER_WHISPER_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -54,24 +59,27 @@ class AudioDiarizer:
         
         try:
             logger.info("Loading pyannote diarization pipeline...")
-            
+
             # Load diarization pipeline
             self.pipeline = Pipeline.from_pretrained(
                 self.diarization_model,
                 use_auth_token=None  # Set HF token if needed for some models
             )
-            
-            # Load Whisper for transcription
-            logger.info(f"Loading Whisper model: {self.whisper_model}")
-            self.whisper = faster_whisper.WhisperModel(
-                self.whisper_model,
-                device=self.device,
-                compute_type="float16" if torch.cuda.is_available() else "float32"
-            )
-            
+
+            # Load Whisper for transcription if available
+            if FASTER_WHISPER_AVAILABLE:
+                logger.info(f"Loading Whisper model: {self.whisper_model}")
+                self.whisper = faster_whisper.WhisperModel(
+                    self.whisper_model,
+                    device=self.device,
+                    compute_type="float16" if torch.cuda.is_available() else "float32"
+                )
+            else:
+                logger.warning("faster_whisper not available. Transcription will be disabled.")
+
             self._loaded = True
             logger.info("Successfully loaded audio processing models")
-            
+
         except Exception as e:
             logger.error(f"Failed to load audio models: {e}")
             raise
@@ -219,10 +227,20 @@ class AudioDiarizer:
         """
         if not self._loaded:
             self.load_models()
-        
+
+        if self.whisper is None:
+            logger.warning("Transcription skipped because faster_whisper is not installed.")
+            return {
+                "text": "",
+                "segments": [],
+                "language": "unknown",
+                "language_probability": 0.0,
+                "duration": 0.0
+            }
+
         try:
             logger.info(f"Transcribing audio: {audio_path}")
-            
+
             segments, info = self.whisper.transcribe(
                 str(audio_path),
                 language=language,
