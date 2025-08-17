@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import logging
+import copy
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ class ProjectConfig:
             config_file: Path to project.json file
         """
         self.config_file = config_file
-        self._config = self.DEFAULT_CONFIG.copy()
+        self._config = copy.deepcopy(self.DEFAULT_CONFIG)
     
     def load(self) -> Dict[str, Any]:
         """Load configuration from file."""
