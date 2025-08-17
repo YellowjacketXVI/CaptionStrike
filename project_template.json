@@ -1,0 +1,93 @@
+{
+  "name": "example_project",
+  "created": "2025-01-01T00:00:00",
+  "description": "Template configuration for CaptionStrike projects",
+  "models": {
+    "captioner": "microsoft/Florence-2-base",
+    "captioner_options": {
+      "available": [
+        "microsoft/Florence-2-base",
+        "microsoft/Florence-2-large"
+      ],
+      "description": "Primary captioning model - Florence-2 variants"
+    },
+    "reasoning": {
+      "enabled": false,
+      "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+      "options": {
+        "available": [
+          "Qwen/Qwen2.5-VL-7B-Instruct",
+          "Qwen/Qwen2.5-VL-3B-Instruct",
+          "Qwen/Qwen2.5-VL-2B-Instruct"
+        ],
+        "description": "Optional reasoning enhancement model"
+      }
+    },
+    "single_model_mode": false,
+    "single_model": "openbmb/MiniCPM-V-2_6",
+    "single_model_options": {
+      "description": "Alternative single model for all tasks",
+      "note": "Enable single_model_mode to use this instead of separate models"
+    }
+  },
+  "action": {
+    "method": "first_frame",
+    "rewrite_with_llm": true,
+    "options": {
+      "method_choices": ["first_frame", "middle_frame", "multiple_frames"],
+      "description": "How to extract action information from videos"
+    }
+  },
+  "isolation": {
+    "faces": true,
+    "sam_refine": false,
+    "options": {
+      "description": "Person isolation settings",
+      "sam_note": "Requires SAM model checkpoint in models directory"
+    }
+  },
+  "processing": {
+    "image_format": "png",
+    "video_format": "mp4",
+    "audio_format": "mp3",
+    "audio_bitrate": "192k",
+    "thumbnail_size": [256, 256],
+    "options": {
+      "image_formats": ["png", "jpg"],
+      "video_formats": ["mp4", "avi", "mov"],
+      "audio_formats": ["mp3", "wav", "flac"],
+      "audio_bitrates": ["128k", "192k", "256k", "320k"]
+    }
+  },
+  "prompts": {
+    "image_caption": "Describe the image in one sentence, focusing on subject, setting, lighting, and mood.",
+    "video_caption": "Describe the video content including the main action and visual elements.",
+    "reasoning_prompt": "Refine this caption to be more descriptive and accurate while keeping it concise.",
+    "custom_prompts": {
+      "description": "Add custom prompts for specific use cases",
+      "examples": {
+        "artistic": "Describe this artwork focusing on style, composition, and artistic elements.",
+        "scientific": "Describe this image with technical accuracy and scientific terminology.",
+        "commercial": "Describe this product image highlighting key features and benefits."
+      }
+    }
+  },
+  "output": {
+    "caption_format": "{caption} [{token}]",
+    "video_action_format": "{caption} [{action}] [{token}]",
+    "preserve_original": true,
+    "create_thumbnails": true,
+    "generate_metadata": true
+  },
+  "advanced": {
+    "batch_size": 1,
+    "max_workers": 4,
+    "memory_optimization": true,
+    "cache_models": true,
+    "log_level": "INFO",
+    "options": {
+      "batch_sizes": [1, 2, 4, 8],
+      "log_levels": ["DEBUG", "INFO", "WARNING", "ERROR"]
+    }
+  }
+}

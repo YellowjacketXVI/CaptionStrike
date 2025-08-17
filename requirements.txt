@@ -1,0 +1,58 @@
+# CaptionStrike Requirements
+# Install with: pip install -r requirements.txt
+
+# Core ML/AI
+torch>=2.2.0
+torchvision>=0.17.0
+torchaudio>=2.2.0
+transformers>=4.42.0
+accelerate>=0.21.0
+sentencepiece>=0.1.99
+timm>=0.9.0
+einops>=0.7.0
+
+# UI and Web
+gradio>=4.44.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# Media Processing
+opencv-python>=4.9.0
+pillow>=10.3.0
+numpy>=1.26.0
+ffmpeg-python>=0.2.0
+pydub>=0.25.0
+soundfile>=0.12.0
+librosa>=0.10.0
+
+# Computer Vision
+ultralytics>=8.3.0
+insightface>=0.7.0
+onnxruntime>=1.16.0
+
+# Audio Processing
+pyannote.audio>=3.1.0
+faster-whisper>=1.1.0
+
+# Utilities
+ulid-py>=1.1.0
+python-ulid>=2.7.0
+tqdm>=4.66.0
+docstring-parser>=0.15.0
+
+# Optional: Enhanced Performance
+# Uncomment if you have compatible GPU and want better performance
+# xformers>=0.0.22
+# flash-attn>=2.3.0
+# bitsandbytes>=0.41.0
+
+# Optional: Qwen2.5-VL Support
+# Uncomment if you want to use Qwen2.5-VL reasoning
+# qwen-vl-utils>=0.0.1
+# tiktoken>=0.5.0
+
+# Development and Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0

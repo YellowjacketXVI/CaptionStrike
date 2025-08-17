@@ -1,0 +1,578 @@
+# CaptionStrike — local dataset builder (spec + code scaffold)
+# -----------------------------------------------------------
+# This single file contains: quickstart, environment, folder layout,
+# and a minimal-but-functional Python/Gradio app scaffold you can run locally.
+# Split into files later by copying sections into ./src/ accordingly.
+
+########################################
+# 0) QUICKSTART
+########################################
+# 1. Create Conda env
+#    conda env create -f environment.yml
+#    conda activate CaptionStrike
+#
+# 2. Start the app (first run will download some models)
+#    python app.py --root "D:/Datasets" --models_dir "D:/Models"
+#
+# 3. In the UI:
+#    • Create a Project → drag/drop images/videos/audio → Open Project
+#    • (Optional) Provide a short reference voice clip OR enter first-sound timestamps
+#    • Press RUN to auto-convert, caption, tag, crop, diarize, and build dataset
+#    • Edit captions inline; re-run if needed. Exports to project/processed/
+#
+# Notes
+#    • All files are copied into <root>/<project>/{raw,processed}/…
+#    • Images → .png; Video → .mp4; Audio → .mp3
+#    • Each media gets a TKN-(ULID) suffix; captions land in parallel .txt files
+#    • Person isolation: InsightFace + YOLO + SAM (optional toggle)
+#    • Audio isolation: pyannote embedding + stitching of matched speaker segments
+
+
+########################################
+# 1) environment.yml
+########################################
+# Save this as environment.yml next to app.py
+
+ENVIRONMENT_YML = r"""
+name: CaptionStrike
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip>=24.0
+  - pytorch>=2.2
+  - torchvision
+  - torchaudio
+  - cudatoolkit
+  - ffmpeg
+  - nodejs>=18  # for future frontend builds if desired
+  - pip:
+      - gradio>=4.44
+      - fastapi>=0.115
+      - uvicorn[standard]>=0.30
+      - opencv-python>=4.9
+      - pillow>=10.3
+      - numpy>=1.26
+      - tqdm>=4.66
+      - pydub>=0.25
+      - soundfile>=0.12
+      - librosa>=0.10
+      - ulid-py>=1.1
+      - ffmpeg-python>=0.2
+      - python-ulid>=2.7
+      - docstring-parser
+      - einops
+      - onnxruntime
+      - onnxruntime-gpu; sys_platform == 'win32'
+      - ultralytics>=8.3  # YOLOv8/10
+      - insightface>=0.7
+      - segment-anything-hq>=0.4  # community wrapper; optional
+      - pyannote.audio>=3.1  # diarization/embeddings (first run downloads models)
+      - faster-whisper>=1.1  # local STT
+      - transformers>=4.42
+      - sentencepiece
+      - timm
+      - xformers; platform_system != 'Windows'  # best-effort
+"""
+
+
+########################################
+# 2) Reference folder layout
+########################################
+FOLDER_LAYOUT = r"""
+<root>/Datasets/
+  └─ <project_name>/
+       ├─ raw/
+       │   ├─ image/  (originals → auto-converted to .png into processed)
+       │   ├─ video/  (originals → auto-converted to .mp4 into processed)
+       │   └─ audio/  (originals → auto-converted to .mp3 into processed)
+       ├─ processed/
+       │   ├─ image/
+       │   │    ├─ <base>__TKN-<ULID>.png
+       │   │    └─ <base>__TKN-<ULID>.txt    (caption)
+       │   ├─ video/
+       │   │    ├─ <base>__TKN-<ULID>.mp4
+       │   │    └─ <base>__TKN-<ULID>.txt    (caption incl. action tags)
+       │   ├─ audio/
+       │   │    ├─ <base>__TKN-<ULID>.mp3    (single-speaker stitched track)
+       │   │    └─ <base>__TKN-<ULID>.txt    (transcript/notes)
+       │   └─ thumbs/  (thumbnail grid previews for UI)
+       └─ meta/
+           ├─ project.json  (settings, model choices, prompts)
+           └─ run_logs.jsonl
+"""
+
+
+########################################
+# 3) app.py (single-file runnable scaffold)
+########################################
+# This section is a functional MVP. It wires up:
+#  • Project management + drag/drop
+#  • Conversion (png/mp4/mp3)
+#  • Caption stubs (replace with your Minimax m-1 local LLM calls)
+#  • Video-first-frame analysis → action token tagging in captions
+#  • Audio diarization → single-speaker stitching
+#  • Person isolation (facial crops) — optional toggle
+#  • Dataset export with TKN-(ULID)
+
+import os, io, json, shutil, argparse, subprocess
+from pathlib import Path
+from datetime import datetime
+
+import gradio as gr
+import numpy as np
+from PIL import Image
+
+# Audio/video
+import ffmpeg
+from pydub import AudioSegment
+
+# Captions / NLP (placeholder LLM bridge)
+from ulid import ULID
+
+# Optional heavy modules are imported lazily inside functions to keep startup fast
+
+APP_NAME = "CaptionStrike"
+
+############################
+# Utility helpers
+############################
+
+def ensure_dirs(*paths: Path):
+    for p in paths:
+        p.mkdir(parents=True, exist_ok=True)
+
+
+def safe_stem(p: Path) -> str:
+    return p.stem.replace(" ", "_").replace("__", "_")
+
+
+def ulid_token() -> str:
+    return f"TKN-{ULID()}"  # lexicographically sortable, unique
+
+
+def write_text(path: Path, text: str):
+    path.write_text(text, encoding="utf-8")
+
+
+############################
+# Media conversion
+############################
+
+def to_png(src: Path, dst: Path) -> Path:
+    img = Image.open(src).convert("RGB")
+    img.save(dst.with_suffix(".png"))
+    return dst.with_suffix(".png")
+
+
+def to_mp4(src: Path, dst: Path) -> Path:
+    out = dst.with_suffix(".mp4")
+    (
+        ffmpeg
+        .input(str(src))
+        .output(str(out), vcodec='libx264', acodec='aac', strict='-2', movflags='faststart')
+        .overwrite_output()
+        .run(quiet=True)
+    )
+    return out
+
+
+def to_mp3(src: Path, dst: Path) -> Path:
+    audio = AudioSegment.from_file(src)
+    out = dst.with_suffix(".mp3")
+    audio.export(out, format="mp3", bitrate="192k")
+    return out
+
+
+############################
+# Image captioning stub
+############################
+CAPTION_PROMPT = (
+    "You are Minimax m-1 running locally. Describe the image in one sentence, "
+    "focusing on subject, setting, lighting, and mood."
+)
+
+
+def caption_image_with_minimax(image_path: Path, models_dir: Path) -> str:
+    # Placeholder: integrate your local m-1 call here.
+    # For now we return a deterministic pseudo-caption using simple heuristics.
+    try:
+        img = Image.open(image_path)
+        w, h = img.size
+        aspect = "portrait" if h > w else ("landscape" if w > h else "square")
+        return f"A {aspect} photo with clear subject and neutral lighting."
+    except Exception:
+        return "An image."
+
+
+############################
+# Video captioning + action token via first frame
+############################
+
+def grab_first_frame(video_path: Path) -> Image.Image:
+    probe = ffmpeg.probe(str(video_path))
+    streams = [s for s in probe["streams"] if s["codec_type"] == "video"]
+    if not streams:
+        raise RuntimeError("No video stream")
+    # Extract at 0.1s to avoid black first frame edge cases
+    out, _ = (
+        ffmpeg.input(str(video_path), ss=0.1)
+        .filter('scale', 640, -1)
+        .output('pipe:', vframes=1, format='image2', vcodec='mjpeg')
+        .run(capture_stdout=True, capture_stderr=True, quiet=True)
+    )
+    return Image.open(io.BytesIO(out))
+
+
+def infer_action_token_from_first_frame(img: Image.Image) -> str:
+    # TODO: replace with actual detector/LLM prompt chain
+    # For now, use a simple stub:
+    return "ACTION:generic"
+
+
+def caption_video_with_minimax(video_path: Path, models_dir: Path) -> str:
+    # Extract first frame and construct a richer prompt downstream.
+    frame = grab_first_frame(video_path)
+    action_tag = infer_action_token_from_first_frame(frame)
+    # Placeholder caption text
+    base = "Short video showing a subject performing an action; stable lighting; clear framing."
+    return f"{base} [{action_tag}]"
+
+
+############################
+# Audio diarization & single-speaker stitch
+############################
+
+def diarize_and_extract_single_speaker(
+    audio_mp3: Path,
+    reference_clip: Path | None,
+    start_ts: float | None,
+    end_ts: float | None,
+    models_dir: Path,
+) -> tuple[Path, str]:
+    """Return (stitched_mp3, transcript_stub).
+
+    Strategy
+    --------
+    1) If reference_clip provided → compute target speaker embedding.
+       Else, if start/end provided → take that window as reference.
+    2) Run diarization across full audio; score segments by cosine to reference.
+    3) Concatenate matched segments → single .mp3
+    4) Run faster-whisper transcript on the stitched track (optional)
+    """
+    from pyannote.audio import Pipeline
+    import torch
+
+    # Load pipeline (first run downloads weights to cache)
+    # You can set HF token via env for some models; try a permissive one
+    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+
+    full = AudioSegment.from_mp3(audio_mp3)
+
+    # Build reference segment
+    ref_segment = None
+    if reference_clip and reference_clip.exists():
+        ref_segment = AudioSegment.from_file(reference_clip)
+    elif start_ts is not None and end_ts is not None and end_ts > start_ts:
+        ref_segment = full[start_ts * 1000 : end_ts * 1000]
+
+    # Diarize
+    diar = pipeline(str(audio_mp3))
+
+    # If we have a reference, pick the most overlapping speaker label in that window
+    target_label = None
+    if ref_segment is not None:
+        # crude heuristic: use the diarization to find active speaker in [start,end]
+        # (Full embedding scoring omitted for brevity in MVP.)
+        if start_ts is not None and end_ts is not None:
+            window = (start_ts, end_ts)
+            best = None
+            for turn, _, speaker in diar.itertracks(yield_label=True):
+                overlap = max(0.0, min(window[1], turn.end) - max(window[0], turn.start))
+                if overlap > 0 and (best is None or overlap > best[0]):
+                    best = (overlap, speaker)
+            if best:
+                target_label = best[1]
+    # Else: choose longest speaker
+    if target_label is None:
+        durations = {}
+        for turn, _, spk in diar.itertracks(yield_label=True):
+            durations[spk] = durations.get(spk, 0.0) + (turn.end - turn.start)
+        target_label = max(durations, key=durations.get)
+
+    # Stitch segments of target speaker
+    out_audio = AudioSegment.silent(duration=0)
+    segs = []
+    for turn, _, spk in diar.itertracks(yield_label=True):
+        if spk == target_label:
+            seg = full[turn.start * 1000 : turn.end * 1000]
+            out_audio += seg
+            segs.append((turn.start, turn.end))
+
+    stitched = audio_mp3.with_name(audio_mp3.stem + "__single_speaker.mp3")
+    out_audio.export(stitched, format="mp3", bitrate="192k")
+
+    transcript = f"Single-speaker stitched from segments: {segs}"
+    return stitched, transcript
+
+
+############################
+# Person isolation (face-driven crops)
+############################
+
+def isolate_person_crops(image_path: Path, out_dir: Path, models_dir: Path) -> list[Path]:
+    """Return list of crop paths. MVP: InsightFace face detection → crops."""
+    import cv2
+    from insightface.app import FaceAnalysis
+
+    out_paths = []
+    ensure_dirs(out_dir)
+
+    app = FaceAnalysis(name="buffalo_l")
+    app.prepare(ctx_id=0, det_size=(640, 640))
+
+    img = cv2.imread(str(image_path))
+    faces = app.get(img)
+    for i, f in enumerate(faces):
+        x1, y1, x2, y2 = map(int, f.bbox)
+        crop = img[max(0,y1):y2, max(0,x1):x2]
+        crop_path = out_dir / f"{image_path.stem}__face{i}.png"
+        cv2.imwrite(str(crop_path), crop)
+        out_paths.append(crop_path)
+    return out_paths
+
+
+############################
+# Core pipeline
+############################
+
+def process_project(
+    root: Path,
+    project: str,
+    models_dir: Path,
+    use_person_isolation: bool = False,
+    reference_voice_clip: Path | None = None,
+    first_sound_ts: float | None = None,
+    end_sound_ts: float | None = None,
+):
+    proj = root / project
+    raw_dir = proj / "raw"
+    proc_dir = proj / "processed"
+    thumbs = proc_dir / "thumbs"
+    ensure_dirs(raw_dir / "image", raw_dir / "video", raw_dir / "audio",
+                proc_dir / "image", proc_dir / "video", proc_dir / "audio", thumbs)
+
+    runlog = []
+
+    # Walk raw folders
+    for kind in ["image", "video", "audio"]:
+        for src in (raw_dir / kind).glob("**/*"):
+            if not src.is_file():
+                continue
+            base = safe_stem(src)
+            token = ulid_token()
+
+            if kind == "image":
+                dst = proc_dir / "image" / f"{base}__{token}"
+                out = to_png(src, dst)
+                if use_person_isolation:
+                    isolate_person_crops(out, out.parent / "crops", models_dir)
+                cap = caption_image_with_minimax(out, models_dir)
+                write_text(out.with_suffix(".txt"), f"{cap} [{token}]\n")
+                runlog.append({"type":"image","src":str(src),"out":str(out)})
+
+            elif kind == "video":
+                dst = proc_dir / "video" / f"{base}__{token}"
+                out = to_mp4(src, dst)
+                cap = caption_video_with_minimax(out, models_dir)
+                write_text(out.with_suffix(".txt"), f"{cap} [{token}]\n")
+                runlog.append({"type":"video","src":str(src),"out":str(out)})
+
+            elif kind == "audio":
+                dst = proc_dir / "audio" / f"{base}__{token}"
+                out = to_mp3(src, dst)
+                stitched, transcript = diarize_and_extract_single_speaker(
+                    out, reference_voice_clip, first_sound_ts, end_sound_ts, models_dir
+                )
+                write_text(out.with_suffix(".txt"), f"{transcript} [{token}]\n")
+                runlog.append({"type":"audio","src":str(src),"out":str(out),"stitched":str(stitched)})
+
+    # Save simple thumbnails for images and videos (first frame)
+    for img in (proc_dir/"image").glob("*.png"):
+        im = Image.open(img).copy()
+        im.thumbnail((256, 256))
+        im.save(thumbs / (img.stem + ".jpg"), quality=85)
+
+    for vid in (proc_dir/"video").glob("*.mp4"):
+        frame = grab_first_frame(vid)
+        frame.thumbnail((256, 256))
+        frame.save(thumbs / (vid.stem + ".jpg"), quality=85)
+
+    # Write run log
+    meta = proj / "meta"
+    ensure_dirs(meta)
+    with (meta/"run_logs.jsonl").open("a", encoding="utf-8") as f:
+        for row in runlog:
+            f.write(json.dumps(row) + "\n")
+
+
+############################
+# Gradio UI
+############################
+
+def build_ui(app_state: dict):
+    root = Path(app_state["root"]).resolve()
+    models_dir = Path(app_state["models_dir"]).resolve()
+    ensure_dirs(root)
+
+    def list_projects():
+        return [p.name for p in root.glob("*") if p.is_dir()]
+
+    def create_project(name):
+        proj = root / name
+        ensure_dirs(proj/"raw"/"image", proj/"raw"/"video", proj/"raw"/"audio", proj/"processed", proj/"meta")
+        (proj/"meta"/"project.json").write_text(json.dumps({
+            "name": name, "created": datetime.now().isoformat(), "models_dir": str(models_dir)
+        }, indent=2))
+        return gr.update(choices=list_projects(), value=name), f"Created project '{name}'."
+
+    def drop_files(project, files):
+        if not project:
+            return "Select a project first."
+        if not files:
+            return "No files received."
+        proj = root / project
+        raw = proj / "raw"
+        ensure_dirs(raw/"image", raw/"video", raw/"audio")
+        accepted = []
+        for f in files:
+            src = Path(f.name)
+            ext = src.suffix.lower()
+            kind = "image" if ext in {".png",".jpg",".jpeg",".webp",".bmp"} else (
+                    "video" if ext in {".mp4",".mov",".mkv",".avi"} else (
+                    "audio" if ext in {".mp3",".wav",".m4a",".flac",".aac"} else None))
+            if not kind:
+                continue
+            dst = raw/kind/src.name
+            shutil.copy2(f.name, dst)
+            accepted.append(str(dst))
+        return f"Added {len(accepted)} file(s)."
+
+    def open_project(project):
+        if not project:
+            return [], "Select a project."
+        thumbs = (root/project/"processed"/"thumbs")
+        # prefer processed thumbs; if empty, render raw images
+        items = []
+        if thumbs.exists():
+            for t in sorted(thumbs.glob("*.jpg")):
+                items.append((str(t), t.stem))
+        else:
+            raw_img = (root/project/"raw"/"image")
+            for img in sorted(raw_img.glob("*")):
+                if img.suffix.lower() in {".png",".jpg",".jpeg",".webp",".bmp"}:
+                    items.append((str(img), img.stem))
+        return items, f"Loaded {len(items)} item(s)."
+
+    def run_pipeline(project, use_isolation, ref_clip, first_ts, end_ts):
+        if not project:
+            return "Select a project first."
+        ref = Path(ref_clip) if ref_clip else None
+        process_project(root, project, models_dir, bool(use_isolation), ref, first_ts or None, end_ts or None)
+        return "Processing complete. Refresh the project to view outputs."
+
+    with gr.Blocks(title=APP_NAME) as demo:
+        gr.Markdown(f"# {APP_NAME} — drag/drop → caption → organized dataset")
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                project_dd = gr.Dropdown(choices=list_projects(), label="Project", interactive=True)
+                new_name = gr.Textbox(label="New project name")
+                create_btn = gr.Button("Create Project")
+                create_btn.click(create_project, inputs=new_name, outputs=[project_dd, gr.Textbox(visible=False)])
+
+                file_drop = gr.Files(type="filepath", file_count="multiple", label="Drop files here")
+                add_btn = gr.Button("Add to Project")
+                add_btn.click(drop_files, inputs=[project_dd, file_drop], outputs=gr.Textbox(label="Status"))
+
+                with gr.Group():
+                    use_iso = gr.Checkbox(label="Isolate person (InsightFace crops)")
+                    ref_clip = gr.Textbox(label="Reference voice clip (optional .wav/mp3 path)")
+                    first_ts = gr.Number(label="First-sound timestamp (s)")
+                    end_ts = gr.Number(label="End timestamp (s)")
+                    run_btn = gr.Button("RUN pipeline")
+                    run_out = gr.Textbox(label="Run status")
+                    run_btn.click(run_pipeline, inputs=[project_dd, use_iso, ref_clip, first_ts, end_ts], outputs=run_out)
+
+            with gr.Column(scale=2):
+                open_btn = gr.Button("Open Project")
+                gallery = gr.Gallery(label="Thumbnails", show_download_button=True)
+                msg = gr.Markdown()
+                open_btn.click(open_project, inputs=project_dd, outputs=[gallery, msg])
+
+    return demo
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=str, required=True, help="Datasets root folder (e.g., D:/Datasets)")
+    parser.add_argument("--models_dir", type=str, default="./models")
+    parser.add_argument("--port", type=int, default=7860)
+    args = parser.parse_args()
+
+    app = build_ui({"root": args.root, "models_dir": args.models_dir})
+    app.launch(server_name="0.0.0.0", server_port=args.port)
+
+
+if __name__ == "__main__":
+    # When you save this whole file as app.py, the above main() will run.
+    pass
+
+
+########################################
+# 4) Protocols for the assigning agent (operational rules)
+########################################
+AGENT_PROTOCOLS = r"""
+1) Project I/O
+   - Accepts images (png/jpg/jpeg/webp/bmp), video (mp4/mov/mkv/avi), audio (mp3/wav/m4a/flac/aac).
+   - On ingest, copy originals to <project>/raw/<kind>/.
+   - On RUN, convert to target formats: image→.png, video→.mp4, audio→.mp3.
+   - Append ULID token to each basename: <base>__TKN-<ULID>.<ext>
+   - Create a sibling .txt caption file with same stem.
+
+2) Captioning
+   - Images: call local Minimax m-1 with prompt template:
+       "Describe subject, setting, lighting, mood in one sentence. Include salient attributes."
+   - Videos: use first-frame analysis to infer an [ACTION:<verb/noun>] tag and include it in the caption.
+   - Captions must end with the exact token in square brackets: [TKN-<ULID>]
+
+3) Person Isolation (optional)
+   - If enabled, run InsightFace detection; save face crops to processed/image/crops/ with source stem.
+   - (Advanced) Optionally run SAM to refine masks for full-person crops; keep original, too.
+
+4) Audio Isolation & Stitching
+   - If user supplies reference voice clip OR timestamp window, derive target-speaker label.
+   - Run diarization across the full source; select segments for the target label; stitch chronologically.
+   - Export stitched track as <base>__TKN-<ULID>__single_speaker.mp3
+   - Generate a transcript or segment list in .txt; include token.
+
+5) Dataset Structure & Thumbnails
+   - Write converted media into processed/<kind>/ with parallel .txt captions.
+   - Generate 256px thumbnails into processed/thumbs/ for the UI gallery.
+
+6) Idempotency & Logs
+   - Never overwrite existing outputs of same stem+token; skip or version.
+   - Append a JSON line per processed item in meta/run_logs.jsonl for auditability.
+
+7) Edit Loop
+   - The UI allows editing caption .txt files in-place; re-run does not clobber manual edits.
+
+8) Extensibility Hooks
+   - Model backends (m-1, BLIP, LLaVA, Whisper, etc.) are loaded via adapters under ./adapters.
+   - Add action-classifier under ./models/action/ and swap via project.json settings.
+"""
+
+# End of file

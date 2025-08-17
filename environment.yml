@@ -1,0 +1,72 @@
+name: CaptionStirke
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip>=24.0
+  - pytorch>=2.2
+  - torchvision
+  - torchaudio
+  - cudatoolkit
+  - ffmpeg
+  - nodejs>=18  # for future frontend builds if desired
+  - pip:
+      # Core UI and API
+      - gradio>=4.44
+      - fastapi>=0.115
+      - uvicorn[standard]>=0.30
+      
+      # Media processing
+      - opencv-python>=4.9
+      - pillow>=10.3
+      - numpy>=1.26
+      - tqdm>=4.66
+      - pydub>=0.25
+      - soundfile>=0.12
+      - librosa>=0.10
+      - ffmpeg-python>=0.2
+      
+      # Utilities
+      - ulid-py>=1.1
+      - python-ulid>=2.7
+      - docstring-parser
+      - einops
+      
+      # ML/AI Core
+      - transformers>=4.42
+      - sentencepiece
+      - timm
+      - accelerate
+      - bitsandbytes
+      - xformers; platform_system != 'Windows'  # best-effort
+      
+      # Computer Vision
+      - onnxruntime
+      - onnxruntime-gpu; sys_platform == 'win32'
+      - ultralytics>=8.3  # YOLOv8/10
+      - insightface>=0.7
+      - segment-anything-hq>=0.4  # community wrapper; optional
+      
+      # Audio Processing
+      - pyannote.audio>=3.1  # diarization/embeddings (first run downloads models)
+      - faster-whisper>=1.1  # local STT
+      
+      # Florence-2 and Vision-Language Models
+      - torch-audio
+      - datasets
+      - evaluate
+      - jiwer
+      - flash-attn; platform_system == 'Linux'  # for better performance on Linux
+      
+      # Optional: Qwen2.5-VL dependencies
+      - qwen-vl-utils
+      - tiktoken
+      
+      # Development and testing
+      - pytest>=7.0
+      - pytest-asyncio
+      - black
+      - flake8
