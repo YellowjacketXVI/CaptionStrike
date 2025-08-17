@@ -36,6 +36,8 @@ python app.py --root "D:\Datasets" --models_dir ".\models"
 
 # Or specify custom paths
 python app.py --root "C:\Your\Dataset\Path" --models_dir "C:\Your\Models\Path" --port 7860
+# (Optional) Pre-download Qwen reasoning model to the models directory
+python app.py --root "D:\Datasets" --models_dir ".\models" --prefetch-qwen
 ```
 
 ### 3. Using the Interface
@@ -115,6 +117,7 @@ Edit `<project>\meta\project.json` to customize:
 ### Optional Reasoning Enhancement
 - `Qwen/Qwen2.5-VL-7B-Instruct` (detailed analysis)
 - Enable via `reasoning.enabled: true` in project config
+- Model files are cached under `--models_dir`; use `--prefetch-qwen` to download ahead of time
 
 ### Single Model Alternative
 - `openbmb/MiniCPM-V-2_6` (all-in-one option)

@@ -15,6 +15,8 @@ import numpy as np
 from PIL import Image
 import torch
 
+logger = logging.getLogger(__name__)
+
 # InsightFace for face detection
 try:
     from insightface.app import FaceAnalysis
@@ -29,8 +31,6 @@ try:
     SAM_AVAILABLE = True
 except ImportError:
     SAM_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
 
 
 class PersonIsolator:

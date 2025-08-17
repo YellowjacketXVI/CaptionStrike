@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from src.ui.app import CaptionStrikeUI
+from src.adapters.qwen_vl_reasoner import download_qwen_model
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -205,6 +206,12 @@ For more information, see README.md
         action="store_true",
         help="Create public Gradio link (use with caution)"
     )
+
+    parser.add_argument(
+        "--prefetch-qwen",
+        action="store_true",
+        help="Download Qwen2.5-VL model files to --models_dir and exit",
+    )
     
     args = parser.parse_args()
     
@@ -220,17 +227,21 @@ For more information, see README.md
         # Validate paths
         root_dir, models_dir = validate_paths(args.root, args.models_dir)
         
+        if args.prefetch_qwen:
+            download_qwen_model("Qwen/Qwen2.5-VL-7B-Instruct", models_dir)
+            return 0
+
         # Print startup info
         print_startup_info(root_dir, models_dir, args.port)
-        
+
         # Initialize UI
         logger.info("Initializing CaptionStrike UI...")
         ui = CaptionStrikeUI(root_dir, models_dir)
-        
+
         # Build interface
         logger.info("Building Gradio interface...")
         interface = ui.build_interface()
-        
+
         # Launch application
         logger.info(f"Launching web interface on {args.host}:{args.port}")
         interface.launch(
@@ -240,7 +251,7 @@ For more information, see README.md
             show_error=True,
             quiet=not args.verbose
         )
-        
+
         return 0
         
     except KeyboardInterrupt:

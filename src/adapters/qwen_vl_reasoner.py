@@ -6,6 +6,8 @@ Used as an optional enhancement layer over Florence-2 base captions.
 """
 
 import logging
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 import warnings
@@ -13,7 +15,6 @@ import warnings
 import torch
 from PIL import Image
 from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
-from qwen_vl_utils import process_vision_info
 
 logger = logging.getLogger(__name__)
 
@@ -21,67 +22,114 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
 
 
+def download_qwen_model(model_name: str, cache_dir: Path) -> None:
+    """Ensure Qwen model files are present in cache_dir."""
+    try:
+        Qwen2VLForConditionalGeneration.from_pretrained(
+            model_name, cache_dir=cache_dir, local_files_only=True
+        )
+        AutoProcessor.from_pretrained(
+            model_name, cache_dir=cache_dir, local_files_only=True
+        )
+        AutoTokenizer.from_pretrained(
+            model_name, cache_dir=cache_dir, local_files_only=True
+        )
+        logger.info("Qwen model already cached")
+    except Exception:
+        logger.info("Downloading Qwen model files...")
+        Qwen2VLForConditionalGeneration.from_pretrained(
+            model_name, cache_dir=cache_dir
+        )
+        AutoProcessor.from_pretrained(model_name, cache_dir=cache_dir)
+        AutoTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
+        logger.info("Qwen model download complete")
+
+
 class QwenVLReasoner:
     """Qwen2.5-VL model adapter for enhanced caption reasoning."""
-    
+
     # Available model variants
     MODELS = {
         "7b": "Qwen/Qwen2.5-VL-7B-Instruct",
         "3b": "Qwen/Qwen2.5-VL-3B-Instruct",
         "2b": "Qwen/Qwen2.5-VL-2B-Instruct"
     }
-    
-    def __init__(self, model_name: str = "7b", device: Optional[str] = None, torch_dtype: Optional[torch.dtype] = None):
+
+    def __init__(
+        self,
+        model_name: str = "7b",
+        device: Optional[str] = None,
+        torch_dtype: Optional[torch.dtype] = None,
+        cache_dir: Optional[Path] = None,
+    ) -> None:
         """Initialize Qwen2.5-VL reasoner.
-        
+
         Args:
             model_name: Model variant ('7b', '3b', '2b') or full model path
             device: Device to run model on (auto-detected if None)
             torch_dtype: Torch data type (auto-selected if None)
+            cache_dir: Directory to cache model files
         """
         self.model_name = model_name
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.torch_dtype = torch_dtype or (torch.float16 if torch.cuda.is_available() else torch.float32)
-        
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+
         # Resolve model path
         if model_name in self.MODELS:
             self.model_path = self.MODELS[model_name]
         else:
             self.model_path = model_name
-        
+
         self.model = None
         self.processor = None
         self.tokenizer = None
+        self._process_vision_info = None
         self._loaded = False
-        
+
         logger.info(f"Initialized Qwen2.5-VL reasoner with model: {self.model_path}")
-    
+
     def load_model(self) -> None:
         """Load the Qwen2.5-VL model and processor."""
         if self._loaded:
             return
-        
+
         try:
+            # lazily import vision utils and install if missing
+            if self._process_vision_info is None:
+                try:
+                    from qwen_vl_utils import process_vision_info
+                except ImportError:
+                    logger.warning("qwen_vl_utils not found, attempting install...")
+                    subprocess.run([sys.executable, "-m", "pip", "install", "qwen-vl-utils"], check=False)
+                    from qwen_vl_utils import process_vision_info  # type: ignore
+                self._process_vision_info = process_vision_info
+
+            # ensure model files downloaded
+            if self.cache_dir:
+                download_qwen_model(self.model_path, self.cache_dir)
+
             logger.info(f"Loading Qwen2.5-VL model: {self.model_path}")
-            
+
             # Load model
             self.model = Qwen2VLForConditionalGeneration.from_pretrained(
                 self.model_path,
                 torch_dtype=self.torch_dtype,
                 attn_implementation="flash_attention_2" if torch.cuda.is_available() else "eager",
-                device_map="auto" if torch.cuda.is_available() else None
+                device_map="auto" if torch.cuda.is_available() else None,
+                cache_dir=self.cache_dir,
             )
-            
+
             # Load processor and tokenizer
-            self.processor = AutoProcessor.from_pretrained(self.model_path)
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
-            
+            self.processor = AutoProcessor.from_pretrained(self.model_path, cache_dir=self.cache_dir)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, cache_dir=self.cache_dir)
+
             if not torch.cuda.is_available():
                 self.model = self.model.to(self.device)
-            
+
             self._loaded = True
             logger.info(f"Successfully loaded Qwen2.5-VL model on {self.device}")
-            
+
         except Exception as e:
             logger.error(f"Failed to load Qwen2.5-VL model: {e}")
             raise
@@ -129,7 +177,7 @@ class QwenVLReasoner:
                 messages, tokenize=False, add_generation_prompt=True
             )
             
-            image_inputs, video_inputs = process_vision_info(messages)
+            image_inputs, video_inputs = self._process_vision_info(messages)
             inputs = self.processor(
                 text=[text],
                 images=image_inputs,
@@ -218,7 +266,7 @@ Keep the description concise but informative, suitable for training data."""
                 messages, tokenize=False, add_generation_prompt=True
             )
             
-            image_inputs, video_inputs = process_vision_info(messages)
+            image_inputs, video_inputs = self._process_vision_info(messages)
             inputs = self.processor(
                 text=[text],
                 images=image_inputs,
