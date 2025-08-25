@@ -20,6 +20,7 @@ Features:
 """
 
 import sys
+import os
 import argparse
 import logging
 from pathlib import Path
@@ -187,24 +188,31 @@ For more information, see README.md
         default=7860,
         help="Port for web interface (default: 7860)"
     )
-    
+
     parser.add_argument(
         "--host",
         type=str,
         default="127.0.0.1",
         help="Host for web interface (default: 127.0.0.1)"
     )
-    
+
     parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging"
     )
-    
+
     parser.add_argument(
         "--share",
         action="store_true",
         help="Create public Gradio link (use with caution)"
+    )
+
+    parser.add_argument(
+        "--system_prompt",
+        type=str,
+        default=os.environ.get("CAPTIONSTRIKE_SYSTEM_PROMPT", ""),
+        help="Optional system prompt to influence captioning"
     )
 
     parser.add_argument(

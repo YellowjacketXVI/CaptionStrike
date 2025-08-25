@@ -263,7 +263,12 @@ class ProcessingPipeline:
             # Load Florence-2 captioner
             florence = self._load_florence_captioner(config)
             
-            # Generate caption and analysis
+            # Generate caption and analysis (with optional system prompt)
+            system_prompt = config.get("captioning.system_prompt", "")
+            # Expose prompt to Florence via env var fallback used by adapter
+            import os
+            if system_prompt:
+                os.environ["CAPTIONSTRIKE_SYSTEM_PROMPT"] = system_prompt
             analysis = florence.analyze_image_comprehensive(converted_file)
             caption = analysis["caption"]
             
@@ -459,14 +464,43 @@ class ProcessingPipeline:
         try:
             added_files = []
             errors = []
-            
+
             for file_path in file_paths:
                 try:
+                    # Handle ZIP archives: extract and treat contents as uploads
+                    if file_path.suffix.lower() == ".zip":
+                        try:
+                            import zipfile
+                            with zipfile.ZipFile(file_path, 'r') as zf:
+                                for member in zf.infolist():
+                                    if member.is_dir():
+                                        continue
+                                    # Extract to a temp staging area inside the project
+                                    staging_dir = layout.project_path / "_staging"
+                                    staging_dir.mkdir(parents=True, exist_ok=True)
+                                    extracted_path = zf.extract(member, path=staging_dir)
+                                    extracted_path = Path(extracted_path)
+                                    media_type = self.media_processor.get_media_type(extracted_path)
+                                    if media_type is None:
+                                        errors.append(f"{member.filename}: Unsupported media type in zip")
+                                        continue
+                                    if media_type == "image":
+                                        dest_dir = layout.raw_image_dir
+                                    elif media_type == "video":
+                                        dest_dir = layout.raw_video_dir
+                                    elif media_type == "audio":
+                                        dest_dir = layout.raw_audio_dir
+                                    copied_file = copy_to_raw(extracted_path, dest_dir)
+                                    added_files.append(copied_file)
+                        except Exception as ze:
+                            errors.append(f"{file_path.name}: Failed to extract zip - {ze}")
+                        continue
+
                     media_type = self.media_processor.get_media_type(file_path)
                     if media_type is None:
                         errors.append(f"{file_path.name}: Unsupported media type")
                         continue
-                    
+
                     # Determine destination directory
                     if media_type == "image":
                         dest_dir = layout.raw_image_dir
@@ -474,11 +508,11 @@ class ProcessingPipeline:
                         dest_dir = layout.raw_video_dir
                     elif media_type == "audio":
                         dest_dir = layout.raw_audio_dir
-                    
+
                     # Copy file to raw directory
                     copied_file = copy_to_raw(file_path, dest_dir)
                     added_files.append(copied_file)
-                    
+
                 except Exception as e:
                     errors.append(f"{file_path.name}: {str(e)}")
             

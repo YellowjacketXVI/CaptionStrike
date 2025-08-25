@@ -94,26 +94,30 @@ class Florence2Captioner:
             logger.error(f"Failed to load Florence-2 model: {e}")
             raise
     
-    def _run_task(self, image: Image.Image, task: str, text_input: Optional[str] = None) -> Dict[str, Any]:
+    def _run_task(self, image: Image.Image, task: str, text_input: Optional[str] = None, system_prompt: str = "") -> Dict[str, Any]:
         """Run a Florence-2 task on an image.
-        
+
         Args:
             image: PIL Image
             task: Task prompt (e.g., "<CAPTION>")
             text_input: Optional text input for the task
-            
+            system_prompt: Optional system prompt to influence model behavior
+
         Returns:
             Dict containing task results
         """
         if not self._loaded:
             self.load_model()
-        
+
         try:
             # Prepare inputs
+            base = task
             if text_input:
-                prompt = task + text_input
+                base = base + text_input
+            if system_prompt:
+                prompt = f"{system_prompt}\n\n{base}"
             else:
-                prompt = task
+                prompt = base
             
             inputs = self.processor(text=prompt, images=image, return_tensors="pt").to(self.device)
             
@@ -159,10 +163,13 @@ class Florence2Captioner:
         
         # Choose task based on detail level
         task = self.TASKS["detailed_caption"] if detailed else self.TASKS["caption"]
-        
+
         try:
-            result = self._run_task(image, task)
-            
+            # Optional system prompt support via environment variable fallback
+            import os
+            system_prompt = os.environ.get("CAPTIONSTRIKE_SYSTEM_PROMPT", "")
+            result = self._run_task(image, task, system_prompt=system_prompt)
+
             # Extract caption from result
             caption = ""
             if task in result:
@@ -238,7 +245,7 @@ class Florence2Captioner:
         
         # Get caption
         caption_result = self.caption_image(image, detailed=True)
-        
+
         # Get objects
         objects_result = self.detect_objects(image)
         

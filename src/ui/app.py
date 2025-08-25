@@ -143,7 +143,8 @@ class CaptionStrikeUI:
                       reference_voice_clip: str,
                       first_sound_ts: Optional[float],
                       end_sound_ts: Optional[float],
-                      force_reprocess: bool = False) -> str:
+                      force_reprocess: bool = False,
+                      system_prompt: str = "") -> str:
         """Run the processing pipeline on a project.
         
         Args:
@@ -169,8 +170,10 @@ class CaptionStrikeUI:
             config = ProjectConfig(layout.project_config_file)
             config.load()
             config.set("isolation.faces", use_person_isolation)
+            if system_prompt is not None:
+                config.set("captioning.system_prompt", system_prompt.strip())
             config.save()
-            
+
             # Prepare audio processing parameters
             ref_clip = Path(reference_voice_clip) if reference_voice_clip and reference_voice_clip.strip() else None
             
@@ -418,7 +421,7 @@ class CaptionStrikeUI:
 
                     file_upload = gr.Files(
                         file_count="multiple",
-                        file_types=["image", "video", "audio"],
+                        file_types=["image", "video", "audio", ".zip"],
                         label="Drop files here or click to browse"
                     )
 
@@ -437,6 +440,15 @@ class CaptionStrikeUI:
                         force_reprocess = gr.Checkbox(
                             label="🔄 Force reprocess existing files",
                             value=False
+                        )
+
+                    # Captioning options
+                    with gr.Group():
+                        gr.Markdown("### 🧠 Captioning Options")
+                        system_prompt = gr.Textbox(
+                            label="System prompt (optional)",
+                            placeholder="Provide a system prompt to guide captioning...",
+                            lines=2
                         )
 
                     # Audio Processing Options
@@ -544,7 +556,8 @@ class CaptionStrikeUI:
                     ref_voice_clip,
                     first_ts,
                     end_ts,
-                    force_reprocess
+                    force_reprocess,
+                    system_prompt
                 ],
                 outputs=[run_status]
             )

@@ -121,7 +121,7 @@ class ProjectLayout:
 
 class ProjectConfig:
     """Manages project configuration."""
-    
+
     DEFAULT_CONFIG = {
         "name": "",
         "created": "",
@@ -133,6 +133,9 @@ class ProjectConfig:
             },
             "single_model_mode": False,
             "single_model": "openbmb/MiniCPM-V-2_6"
+        },
+        "captioning": {
+            "system_prompt": ""
         },
         "action": {
             "method": "first_frame",
