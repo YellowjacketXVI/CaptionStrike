@@ -112,7 +112,7 @@ FOLDER_LAYOUT = r"""
 # This section is a functional MVP. It wires up:
 #  • Project management + drag/drop
 #  • Conversion (png/mp4/mp3)
-#  • Caption stubs (replace with your Minimax m-1 local LLM calls)
+#  • Caption stubs (replace with your Florence-2 or Qwen VL local calls)
 #  • Video-first-frame analysis → action token tagging in captions
 #  • Audio diarization → single-speaker stitching
 #  • Person isolation (facial crops) — optional toggle
@@ -191,13 +191,12 @@ def to_mp3(src: Path, dst: Path) -> Path:
 # Image captioning stub
 ############################
 CAPTION_PROMPT = (
-    "You are Minimax m-1 running locally. Describe the image in one sentence, "
-    "focusing on subject, setting, lighting, and mood."
+    "Describe the image in one sentence, focusing on subject, setting, lighting, and mood."
 )
 
 
-def caption_image_with_minimax(image_path: Path, models_dir: Path) -> str:
-    # Placeholder: integrate your local m-1 call here.
+def caption_image_stub(image_path: Path, models_dir: Path) -> str:
+    # Placeholder: integrate your local Florence-2 or Qwen call here.
     # For now we return a deterministic pseudo-caption using simple heuristics.
     try:
         img = Image.open(image_path)
@@ -233,7 +232,7 @@ def infer_action_token_from_first_frame(img: Image.Image) -> str:
     return "ACTION:generic"
 
 
-def caption_video_with_minimax(video_path: Path, models_dir: Path) -> str:
+def caption_video_stub(video_path: Path, models_dir: Path) -> str:
     # Extract first frame and construct a richer prompt downstream.
     frame = grab_first_frame(video_path)
     action_tag = infer_action_token_from_first_frame(frame)
@@ -380,14 +379,14 @@ def process_project(
                 out = to_png(src, dst)
                 if use_person_isolation:
                     isolate_person_crops(out, out.parent / "crops", models_dir)
-                cap = caption_image_with_minimax(out, models_dir)
+                cap = caption_image_stub(out, models_dir)
                 write_text(out.with_suffix(".txt"), f"{cap} [{token}]\n")
                 runlog.append({"type":"image","src":str(src),"out":str(out)})
 
             elif kind == "video":
                 dst = proc_dir / "video" / f"{base}__{token}"
                 out = to_mp4(src, dst)
-                cap = caption_video_with_minimax(out, models_dir)
+                cap = caption_video_stub(out, models_dir)
                 write_text(out.with_suffix(".txt"), f"{cap} [{token}]\n")
                 runlog.append({"type":"video","src":str(src),"out":str(out)})
 
@@ -544,7 +543,7 @@ AGENT_PROTOCOLS = r"""
    - Create a sibling .txt caption file with same stem.
 
 2) Captioning
-   - Images: call local Minimax m-1 with prompt template:
+   - Images: use Florence-2 (default) or Qwen2.5-VL with prompt template:
        "Describe subject, setting, lighting, mood in one sentence. Include salient attributes."
    - Videos: use first-frame analysis to infer an [ACTION:<verb/noun>] tag and include it in the caption.
    - Captions must end with the exact token in square brackets: [TKN-<ULID>]
@@ -571,7 +570,7 @@ AGENT_PROTOCOLS = r"""
    - The UI allows editing caption .txt files in-place; re-run does not clobber manual edits.
 
 8) Extensibility Hooks
-   - Model backends (m-1, BLIP, LLaVA, Whisper, etc.) are loaded via adapters under ./adapters.
+   - Model backends (Florence-2, Qwen, BLIP, LLaVA, Whisper, etc.) are loaded via adapters under ./adapters.
    - Add action-classifier under ./models/action/ and swap via project.json settings.
 """
 
