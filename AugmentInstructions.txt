@@ -46,7 +46,7 @@ dependencies:
   - pytorch>=2.2
   - torchvision
   - torchaudio
-  - cudatoolkit
+  - pytorch-cuda=12.1
   - ffmpeg
   - nodejs>=18  # for future frontend builds if desired
   - pip:
@@ -60,9 +60,8 @@ dependencies:
       - pydub>=0.25
       - soundfile>=0.12
       - librosa>=0.10
-      - ulid-py>=1.1
-      - ffmpeg-python>=0.2
       - python-ulid>=2.7
+      - ffmpeg-python>=0.2
       - docstring-parser
       - einops
       - onnxruntime
@@ -118,12 +117,11 @@ FOLDER_LAYOUT = r"""
 #  • Person isolation (facial crops) — optional toggle
 #  • Dataset export with TKN-(ULID)
 
-import os, io, json, shutil, argparse, subprocess
+import io, json, shutil, argparse
 from pathlib import Path
 from datetime import datetime
 
 import gradio as gr
-import numpy as np
 from PIL import Image
 
 # Audio/video
@@ -170,10 +168,19 @@ def to_png(src: Path, dst: Path) -> Path:
 
 def to_mp4(src: Path, dst: Path) -> Path:
     out = dst.with_suffix(".mp4")
+    try:
+        probe = ffmpeg.probe(str(src))
+        has_audio = any(s.get("codec_type") == "audio" for s in probe.get("streams", []))
+    except Exception:
+        has_audio = True  # assume audio to keep behavior conservative
+    stream = ffmpeg.input(str(src))
+    kwargs = {"vcodec": "libx264", "movflags": "faststart"}
+    if has_audio:
+        stream = stream.output(str(out), **kwargs, acodec="aac")
+    else:
+        stream = stream.output(str(out), **kwargs, an=None)
     (
-        ffmpeg
-        .input(str(src))
-        .output(str(out), vcodec='libx264', acodec='aac', strict='-2', movflags='faststart')
+        stream
         .overwrite_output()
         .run(quiet=True)
     )
@@ -212,18 +219,22 @@ def caption_image_stub(image_path: Path, models_dir: Path) -> str:
 ############################
 
 def grab_first_frame(video_path: Path) -> Image.Image:
-    probe = ffmpeg.probe(str(video_path))
-    streams = [s for s in probe["streams"] if s["codec_type"] == "video"]
-    if not streams:
-        raise RuntimeError("No video stream")
-    # Extract at 0.1s to avoid black first frame edge cases
-    out, _ = (
-        ffmpeg.input(str(video_path), ss=0.1)
-        .filter('scale', 640, -1)
-        .output('pipe:', vframes=1, format='image2', vcodec='mjpeg')
-        .run(capture_stdout=True, capture_stderr=True, quiet=True)
-    )
-    return Image.open(io.BytesIO(out))
+    try:
+        probe = ffmpeg.probe(str(video_path))
+        streams = [s for s in probe.get("streams", []) if s.get("codec_type") == "video"]
+        if not streams:
+            raise RuntimeError("No video stream")
+        # Extract at 0.1s to avoid black first frame edge cases
+        out, _ = (
+            ffmpeg.input(str(video_path), ss=0.1)
+            .filter('scale', 640, -1)
+            .output('pipe:', vframes=1, format='image2', vcodec='mjpeg')
+            .run(capture_stdout=True, capture_stderr=True, quiet=True)
+        )
+        return Image.open(io.BytesIO(out))
+    except Exception:
+        # Fallback placeholder to avoid crashing downstream
+        return Image.new('RGB', (640, 360), (128, 128, 128))
 
 
 def infer_action_token_from_first_frame(img: Image.Image) -> str:
@@ -262,54 +273,60 @@ def diarize_and_extract_single_speaker(
     3) Concatenate matched segments → single .mp3
     4) Run faster-whisper transcript on the stitched track (optional)
     """
-    from pyannote.audio import Pipeline
-    import torch
-
-    # Load pipeline (first run downloads weights to cache)
-    # You can set HF token via env for some models; try a permissive one
-    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+    try:
+        from pyannote.audio import Pipeline
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+        diar = pipeline(str(audio_mp3))
+    except Exception as e:
+        # Fallback: skip diarization
+        return audio_mp3, f"Diarization skipped: {e}"
 
     full = AudioSegment.from_mp3(audio_mp3)
 
     # Build reference segment
     ref_segment = None
     if reference_clip and reference_clip.exists():
-        ref_segment = AudioSegment.from_file(reference_clip)
+        try:
+            ref_segment = AudioSegment.from_file(reference_clip)
+        except Exception:
+            ref_segment = None
     elif start_ts is not None and end_ts is not None and end_ts > start_ts:
-        ref_segment = full[start_ts * 1000 : end_ts * 1000]
+        ref_segment = full[int(start_ts * 1000) : int(end_ts * 1000)]
 
-    # Diarize
-    diar = pipeline(str(audio_mp3))
+    # Materialize tracks
+    tracks = list(diar.itertracks(yield_label=True))
+    if not tracks:
+        return audio_mp3, "No speaker activity detected; returned original audio."
 
     # If we have a reference, pick the most overlapping speaker label in that window
     target_label = None
-    if ref_segment is not None:
-        # crude heuristic: use the diarization to find active speaker in [start,end]
-        # (Full embedding scoring omitted for brevity in MVP.)
-        if start_ts is not None and end_ts is not None:
-            window = (start_ts, end_ts)
-            best = None
-            for turn, _, speaker in diar.itertracks(yield_label=True):
-                overlap = max(0.0, min(window[1], turn.end) - max(window[0], turn.start))
-                if overlap > 0 and (best is None or overlap > best[0]):
-                    best = (overlap, speaker)
-            if best:
-                target_label = best[1]
+    if ref_segment is not None and start_ts is not None and end_ts is not None:
+        window = (float(start_ts), float(end_ts))
+        best = None
+        for turn, _, speaker in tracks:
+            overlap = max(0.0, min(window[1], turn.end) - max(window[0], turn.start))
+            if overlap > 0 and (best is None or overlap > best[0]):
+                best = (overlap, speaker)
+        if best:
+            target_label = best[1]
+
     # Else: choose longest speaker
     if target_label is None:
-        durations = {}
-        for turn, _, spk in diar.itertracks(yield_label=True):
-            durations[spk] = durations.get(spk, 0.0) + (turn.end - turn.start)
+        durations: dict[str, float] = {}
+        for turn, _, spk in tracks:
+            durations[spk] = durations.get(spk, 0.0) + float(turn.end - turn.start)
+        if not durations:
+            return audio_mp3, "No diarization durations; returned original audio."
         target_label = max(durations, key=durations.get)
 
     # Stitch segments of target speaker
     out_audio = AudioSegment.silent(duration=0)
-    segs = []
-    for turn, _, spk in diar.itertracks(yield_label=True):
+    segs: list[tuple[float, float]] = []
+    for turn, _, spk in tracks:
         if spk == target_label:
-            seg = full[turn.start * 1000 : turn.end * 1000]
+            seg = full[int(turn.start * 1000) : int(turn.end * 1000)]
             out_audio += seg
-            segs.append((turn.start, turn.end))
+            segs.append((float(turn.start), float(turn.end)))
 
     stitched = audio_mp3.with_name(audio_mp3.stem + "__single_speaker.mp3")
     out_audio.export(stitched, format="mp3", bitrate="192k")
@@ -324,23 +341,28 @@ def diarize_and_extract_single_speaker(
 
 def isolate_person_crops(image_path: Path, out_dir: Path, models_dir: Path) -> list[Path]:
     """Return list of crop paths. MVP: InsightFace face detection → crops."""
-    import cv2
-    from insightface.app import FaceAnalysis
-
-    out_paths = []
+    out_paths: list[Path] = []
     ensure_dirs(out_dir)
+    try:
+        import torch
+        import cv2
+        from insightface.app import FaceAnalysis
 
-    app = FaceAnalysis(name="buffalo_l")
-    app.prepare(ctx_id=0, det_size=(640, 640))
+        ctx_id = 0 if torch.cuda.is_available() else -1
+        app = FaceAnalysis(name="buffalo_l")
+        app.prepare(ctx_id=ctx_id, det_size=(640, 640))
 
-    img = cv2.imread(str(image_path))
-    faces = app.get(img)
-    for i, f in enumerate(faces):
-        x1, y1, x2, y2 = map(int, f.bbox)
-        crop = img[max(0,y1):y2, max(0,x1):x2]
-        crop_path = out_dir / f"{image_path.stem}__face{i}.png"
-        cv2.imwrite(str(crop_path), crop)
-        out_paths.append(crop_path)
+        img = cv2.imread(str(image_path))
+        faces = app.get(img)
+        for i, f in enumerate(faces):
+            x1, y1, x2, y2 = map(int, f.bbox)
+            crop = img[max(0, y1):y2, max(0, x1):x2]
+            crop_path = out_dir / f"{image_path.stem}__face{i}.png"
+            cv2.imwrite(str(crop_path), crop)
+            out_paths.append(crop_path)
+    except Exception:
+        # Swallow and continue without crops
+        return out_paths
     return out_paths
 
 
@@ -365,50 +387,88 @@ def process_project(
                 proc_dir / "image", proc_dir / "video", proc_dir / "audio", thumbs)
 
     runlog = []
+    now = datetime.now().isoformat()
+
+    image_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    video_exts = {".mp4", ".mov", ".mkv", ".avi"}
+    audio_exts = {".mp3", ".wav", ".m4a", ".flac", ".aac"}
 
     # Walk raw folders
     for kind in ["image", "video", "audio"]:
         for src in (raw_dir / kind).glob("**/*"):
             if not src.is_file():
                 continue
+            if kind == "image" and src.suffix.lower() not in image_exts:
+                continue
+            if kind == "video" and src.suffix.lower() not in video_exts:
+                continue
+            if kind == "audio" and src.suffix.lower() not in audio_exts:
+                continue
+
             base = safe_stem(src)
             token = ulid_token()
 
-            if kind == "image":
-                dst = proc_dir / "image" / f"{base}__{token}"
-                out = to_png(src, dst)
-                if use_person_isolation:
-                    isolate_person_crops(out, out.parent / "crops", models_dir)
-                cap = caption_image_stub(out, models_dir)
-                write_text(out.with_suffix(".txt"), f"{cap} [{token}]\n")
-                runlog.append({"type":"image","src":str(src),"out":str(out)})
+            try:
+                if kind == "image":
+                    dst = proc_dir / "image" / f"{base}__{token}"
+                    out = to_png(src, dst)
+                    if use_person_isolation:
+                        try:
+                            isolate_person_crops(out, out.parent / "crops", models_dir)
+                        except Exception:
+                            pass
+                    cap = caption_image_stub(out, models_dir)
+                    write_text(out.with_suffix(".txt"), f"{cap} [{token}]\n")
+                    runlog.append({"ts": now, "status": "ok", "type": "image", "src": str(src), "out": str(out)})
 
-            elif kind == "video":
-                dst = proc_dir / "video" / f"{base}__{token}"
-                out = to_mp4(src, dst)
-                cap = caption_video_stub(out, models_dir)
-                write_text(out.with_suffix(".txt"), f"{cap} [{token}]\n")
-                runlog.append({"type":"video","src":str(src),"out":str(out)})
+                elif kind == "video":
+                    dst = proc_dir / "video" / f"{base}__{token}"
+                    out = to_mp4(src, dst)
+                    cap = caption_video_stub(out, models_dir)
+                    write_text(out.with_suffix(".txt"), f"{cap} [{token}]\n")
+                    runlog.append({"ts": now, "status": "ok", "type": "video", "src": str(src), "out": str(out)})
 
-            elif kind == "audio":
-                dst = proc_dir / "audio" / f"{base}__{token}"
-                out = to_mp3(src, dst)
-                stitched, transcript = diarize_and_extract_single_speaker(
-                    out, reference_voice_clip, first_sound_ts, end_sound_ts, models_dir
-                )
-                write_text(out.with_suffix(".txt"), f"{transcript} [{token}]\n")
-                runlog.append({"type":"audio","src":str(src),"out":str(out),"stitched":str(stitched)})
+                elif kind == "audio":
+                    dst = proc_dir / "audio" / f"{base}__{token}"
+                    out = to_mp3(src, dst)
+                    stitched, transcript = diarize_and_extract_single_speaker(
+                        out, reference_voice_clip, first_sound_ts, end_sound_ts, models_dir
+                    )
+                    write_text(out.with_suffix(".txt"), f"{transcript} [{token}]\n")
+                    runlog.append({
+                        "ts": now,
+                        "status": "ok",
+                        "type": "audio",
+                        "src": str(src),
+                        "out": str(out),
+                        "stitched": str(stitched)
+                    })
+            except Exception as e:
+                runlog.append({
+                    "ts": now,
+                    "status": "error",
+                    "type": kind,
+                    "src": str(src),
+                    "error": str(e)
+                })
+                continue
 
     # Save simple thumbnails for images and videos (first frame)
     for img in (proc_dir/"image").glob("*.png"):
-        im = Image.open(img).copy()
-        im.thumbnail((256, 256))
-        im.save(thumbs / (img.stem + ".jpg"), quality=85)
+        try:
+            im = Image.open(img).copy()
+            im.thumbnail((256, 256))
+            im.save(thumbs / (img.stem + ".jpg"), quality=85)
+        except Exception:
+            pass
 
     for vid in (proc_dir/"video").glob("*.mp4"):
-        frame = grab_first_frame(vid)
-        frame.thumbnail((256, 256))
-        frame.save(thumbs / (vid.stem + ".jpg"), quality=85)
+        try:
+            frame = grab_first_frame(vid)
+            frame.thumbnail((256, 256))
+            frame.save(thumbs / (vid.stem + ".jpg"), quality=85)
+        except Exception:
+            pass
 
     # Write run log
     meta = proj / "meta"
@@ -448,7 +508,7 @@ def build_ui(app_state: dict):
         ensure_dirs(raw/"image", raw/"video", raw/"audio")
         accepted = []
         for f in files:
-            src = Path(f.name)
+            src = Path(f)  # f is a filepath string when type="filepath"
             ext = src.suffix.lower()
             kind = "image" if ext in {".png",".jpg",".jpeg",".webp",".bmp"} else (
                     "video" if ext in {".mp4",".mov",".mkv",".avi"} else (
@@ -456,8 +516,11 @@ def build_ui(app_state: dict):
             if not kind:
                 continue
             dst = raw/kind/src.name
-            shutil.copy2(f.name, dst)
-            accepted.append(str(dst))
+            try:
+                shutil.copy2(str(src), str(dst))
+                accepted.append(str(dst))
+            except Exception:
+                continue
         return f"Added {len(accepted)} file(s)."
 
     def open_project(project):
@@ -479,7 +542,10 @@ def build_ui(app_state: dict):
     def run_pipeline(project, use_isolation, ref_clip, first_ts, end_ts):
         if not project:
             return "Select a project first."
-        ref = Path(ref_clip) if ref_clip else None
+        ref = Path(ref_clip).resolve() if ref_clip else None
+        # Security: only allow reference clip inside root
+        if ref and not ref.is_relative_to(root):
+            ref = None
         process_project(root, project, models_dir, bool(use_isolation), ref, first_ts or None, end_ts or None)
         return "Processing complete. Refresh the project to view outputs."
 
@@ -491,15 +557,17 @@ def build_ui(app_state: dict):
                 project_dd = gr.Dropdown(choices=list_projects(), label="Project", interactive=True)
                 new_name = gr.Textbox(label="New project name")
                 create_btn = gr.Button("Create Project")
-                create_btn.click(create_project, inputs=new_name, outputs=[project_dd, gr.Textbox(visible=False)])
+                create_status = gr.Markdown()
+                create_btn.click(create_project, inputs=new_name, outputs=[project_dd, create_status])
 
                 file_drop = gr.Files(type="filepath", file_count="multiple", label="Drop files here")
                 add_btn = gr.Button("Add to Project")
-                add_btn.click(drop_files, inputs=[project_dd, file_drop], outputs=gr.Textbox(label="Status"))
+                add_status = gr.Markdown()
+                add_btn.click(drop_files, inputs=[project_dd, file_drop], outputs=add_status)
 
                 with gr.Group():
                     use_iso = gr.Checkbox(label="Isolate person (InsightFace crops)")
-                    ref_clip = gr.Textbox(label="Reference voice clip (optional .wav/mp3 path)")
+                    ref_clip = gr.Textbox(label="Reference voice clip (optional .wav/mp3 path; must be inside project root)")
                     first_ts = gr.Number(label="First-sound timestamp (s)")
                     end_ts = gr.Number(label="End timestamp (s)")
                     run_btn = gr.Button("RUN pipeline")
@@ -528,7 +596,7 @@ def main():
 
 if __name__ == "__main__":
     # When you save this whole file as app.py, the above main() will run.
-    pass
+    main()
 
 
 ########################################
