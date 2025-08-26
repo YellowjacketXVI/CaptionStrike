@@ -57,8 +57,8 @@ python app.py --root "C:\Your\Dataset\Path" --models_dir "C:\Your\Models\Path" -
 ## Step 4: Verify Installation
 
 ```powershell
-# Run smoke test
-python tests\smoke_test.py
+# Run test suite
+pytest
 
 # Check acceptance criteria
 python app.py --check
@@ -149,4 +149,4 @@ If you encounter issues:
 1. Run with debug: `.\run_captionstrike.ps1 -Debug`
 2. Check logs: `captionstrike.log`
 3. Verify environment: `conda list`
-4. Test components: `python tests\smoke_test.py`
+4. Test components: `pytest`

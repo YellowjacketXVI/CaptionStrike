@@ -186,7 +186,7 @@ A video showing a person walking in a park with natural lighting [ACTION:person_
 Run the smoke test to verify installation:
 
 ```powershell
-python tests\smoke_test.py
+pytest
 ```
 
 This will test:

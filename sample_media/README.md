@@ -19,7 +19,7 @@ This directory contains sample media files for testing CaptionStrike functionali
 ## Usage
 
 1. **Manual Testing**: Drag and drop these files into CaptionStrike projects to test functionality
-2. **Automated Testing**: The smoke test (`tests/smoke_test.py`) uses these files automatically
+2. **Automated Testing**: The pytest suite uses these files automatically
 3. **Development**: Use these as reference examples when developing new features
 
 ## Creating Your Own Test Media

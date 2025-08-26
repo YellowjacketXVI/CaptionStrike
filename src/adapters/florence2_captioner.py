@@ -145,13 +145,19 @@ class Florence2Captioner:
             logger.error(f"Failed to run Florence-2 task {task}: {e}")
             return {}
     
-    def caption_image(self, image: Union[Image.Image, Path, str], detailed: bool = False) -> Dict[str, Any]:
+    def caption_image(
+        self,
+        image: Union[Image.Image, Path, str],
+        detailed: bool = False,
+        system_prompt: str = "",
+    ) -> Dict[str, Any]:
         """Generate caption for an image.
-        
+
         Args:
             image: PIL Image, file path, or path string
             detailed: Whether to use detailed captioning
-            
+            system_prompt: Optional system prompt to influence captioning
+
         Returns:
             Dict with 'caption' key and other metadata
         """
@@ -160,14 +166,11 @@ class Florence2Captioner:
             image = Image.open(image).convert('RGB')
         elif not isinstance(image, Image.Image):
             raise ValueError("Image must be PIL Image or file path")
-        
+
         # Choose task based on detail level
         task = self.TASKS["detailed_caption"] if detailed else self.TASKS["caption"]
 
         try:
-            # Optional system prompt support via environment variable fallback
-            import os
-            system_prompt = os.environ.get("CAPTIONSTRIKE_SYSTEM_PROMPT", "")
             result = self._run_task(image, task, system_prompt=system_prompt)
 
             # Extract caption from result
@@ -230,21 +233,24 @@ class Florence2Captioner:
                 "error": str(e)
             }
     
-    def analyze_image_comprehensive(self, image: Union[Image.Image, Path, str]) -> Dict[str, Any]:
+    def analyze_image_comprehensive(
+        self, image: Union[Image.Image, Path, str], system_prompt: str = ""
+    ) -> Dict[str, Any]:
         """Perform comprehensive image analysis including captioning and object detection.
-        
+
         Args:
             image: PIL Image, file path, or path string
-            
+            system_prompt: Optional system prompt to guide captioning
+
         Returns:
             Dict with caption, objects, and tags
         """
         # Load image if path provided
         if isinstance(image, (str, Path)):
             image = Image.open(image).convert('RGB')
-        
+
         # Get caption
-        caption_result = self.caption_image(image, detailed=True)
+        caption_result = self.caption_image(image, detailed=True, system_prompt=system_prompt)
 
         # Get objects
         objects_result = self.detect_objects(image)

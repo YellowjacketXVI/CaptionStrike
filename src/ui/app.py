@@ -189,8 +189,15 @@ class CaptionStrikeUI:
 
                     # Process single file (simplified version of pipeline logic)
                     result = self.pipeline._process_single_file(
-                        raw_file, layout, config, None,
-                        ref_clip, first_sound_ts, end_sound_ts, force_reprocess
+                        raw_file,
+                        layout,
+                        config,
+                        None,
+                        ref_clip,
+                        first_sound_ts,
+                        end_sound_ts,
+                        force_reprocess,
+                        None,
                     )
 
                     if result["success"]:
@@ -404,174 +411,197 @@ class CaptionStrikeUI:
             return f"Error getting stats: {str(e)}"
 
 
-        def load_context_diary(self, project_name: str) -> str:
-            """Load context/diary text from meta/context.txt for the project."""
-            try:
-                if not project_name:
-                    return ""
-                layout = ProjectLayout(self.root_dir, project_name)
-                context_file = layout.meta_dir / "context.txt"
-                if context_file.exists():
-                    text = context_file.read_text(encoding="utf-8")
-                    logger.debug(f"Loaded context diary for project '{project_name}', {len(text)} chars")
-                    return text
+    def load_context_diary(self, project_name: str) -> str:
+        """Load context/diary text from meta/context.txt for the project."""
+        try:
+            if not project_name:
                 return ""
-            except Exception as e:
-                logger.error(f"Failed to load context diary: {e}")
-                return ""
+            layout = ProjectLayout(self.root_dir, project_name)
+            context_file = layout.meta_dir / "context.txt"
+            if context_file.exists():
+                text = context_file.read_text(encoding="utf-8")
+                logger.debug(
+                    f"Loaded context diary for project '{project_name}', {len(text)} chars"
+                )
+                return text
+            return ""
+        except Exception as e:
+            logger.error(f"Failed to load context diary: {e}")
+            return ""
 
-        def save_context_diary(self, project_name: str, context_text: str) -> str:
-            """Save context/diary text to meta/context.txt for the project."""
-            try:
-                if not project_name:
-                    return "❌ Please select a project first"
-                layout = ProjectLayout(self.root_dir, project_name)
-                layout.meta_dir.mkdir(parents=True, exist_ok=True)
-                context_file = layout.meta_dir / "context.txt"
-                (layout.meta_dir / "context.txt").write_text(context_text or "", encoding="utf-8")
-                logger.info(f"Saved context diary for project '{project_name}' to {context_file}")
-                return "✅ Context/Diary saved"
-            except Exception as e:
-                logger.error(f"Failed to save context diary: {e}")
-                return f"❌ Error saving context: {str(e)}"
+    def save_context_diary(self, project_name: str, context_text: str) -> str:
+        """Save context/diary text to meta/context.txt for the project."""
+        try:
+            if not project_name:
+                return "❌ Please select a project first"
+            layout = ProjectLayout(self.root_dir, project_name)
+            layout.meta_dir.mkdir(parents=True, exist_ok=True)
+            context_file = layout.meta_dir / "context.txt"
+            context_file.write_text(context_text or "", encoding="utf-8")
+            logger.info(
+                f"Saved context diary for project '{project_name}' to {context_file}"
+            )
+            return "✅ Context/Diary saved"
+        except Exception as e:
+            logger.error(f"Failed to save context diary: {e}")
+            return f"❌ Error saving context: {str(e)}"
 
-        def get_file_counts(self, project_name: Optional[str]) -> str:
-            """Return counts of raw files by type for a project as a Markdown summary."""
-            try:
-                if not project_name:
-                    return "No project selected"
-                layout = ProjectLayout(self.root_dir, project_name)
-                if not layout.exists():
-                    return f"Project '{project_name}' does not exist"
-                img = len(layout.get_raw_files("image"))
-                vid = len(layout.get_raw_files("video"))
-                aud = len(layout.get_raw_files("audio"))
-                total = img + vid + aud
-                msg = f"Raw files ready: {total} (🖼️ {img} / 🎬 {vid} / 🎵 {aud})"
-                logger.debug(f"File counts for '{project_name}': {msg}")
-                return msg
-            except Exception as e:
-                logger.error(f"Failed to compute file counts: {e}")
-                return "Unable to compute file counts"
+    def get_file_counts(self, project_name: Optional[str]) -> str:
+        """Return counts of raw files by type for a project as a Markdown summary."""
+        try:
+            if not project_name:
+                return "No project selected"
+            layout = ProjectLayout(self.root_dir, project_name)
+            if not layout.exists():
+                return f"Project '{project_name}' does not exist"
+            img = len(layout.get_raw_files("image"))
+            vid = len(layout.get_raw_files("video"))
+            aud = len(layout.get_raw_files("audio"))
+            total = img + vid + aud
+            msg = f"Raw files ready: {total} (🖼️ {img} / 🎬 {vid} / 🎵 {aud})"
+            logger.debug(f"File counts for '{project_name}': {msg}")
+            return msg
+        except Exception as e:
+            logger.error(f"Failed to compute file counts: {e}")
+            return "Unable to compute file counts"
 
-        def is_ready_to_run(self, project_name: Optional[str]) -> bool:
-            """Project is ready to run if selected and has at least one raw file."""
-            try:
-                if not project_name:
-                    return False
-                layout = ProjectLayout(self.root_dir, project_name)
-                if not layout.exists():
-                    return False
-                total = len(layout.get_raw_files("image")) + len(layout.get_raw_files("video")) + len(layout.get_raw_files("audio"))
-                ready = total > 0
-                logger.debug(f"Run readiness for '{project_name}': {ready} (total raw={total})")
-                return ready
-            except Exception as e:
-                logger.error(f"Failed to compute run readiness: {e}")
+    def is_ready_to_run(self, project_name: Optional[str]) -> bool:
+        """Project is ready to run if selected and has at least one raw file."""
+        try:
+            if not project_name:
                 return False
+            layout = ProjectLayout(self.root_dir, project_name)
+            if not layout.exists():
+                return False
+            total = (
+                len(layout.get_raw_files("image"))
+                + len(layout.get_raw_files("video"))
+                + len(layout.get_raw_files("audio"))
+            )
+            ready = total > 0
+            logger.debug(
+                f"Run readiness for '{project_name}': {ready} (total raw={total})"
+            )
+            return ready
+        except Exception as e:
+            logger.error(f"Failed to compute run readiness: {e}")
+            return False
 
-        def compute_run_button_state(self, project_name: Optional[str]) -> gr.Update:
-            """Return a Gradio update to enable/disable the Run button."""
-            return gr.update(interactive=self.is_ready_to_run(project_name))
+    def compute_run_button_state(self, project_name: Optional[str]) -> gr.Update:
+        """Return a Gradio update to enable/disable the Run button."""
+        return gr.update(interactive=self.is_ready_to_run(project_name))
 
-        def load_model_settings(self, project_name: str) -> Tuple[str, bool, str, str, str, str, str, str]:
-            """Load model settings and prompts for a project.
-            Returns: (captioner, reasoning_enabled, reasoning_model, system_prompt, context_diary, image_prompt, video_prompt, audio_prompt)
-            """
-            try:
-                if not project_name:
-                    return ("", False, "", "", "", "", "", "")
-                layout = ProjectLayout(self.root_dir, project_name)
-                config = ProjectConfig(layout.project_config_file)
-                config.load()
-                captioner = config.get("models.captioner", "Qwen/Qwen2.5-VL-7B-Instruct")
-                reasoning_enabled = bool(config.get("models.reasoning.enabled", False))
-                reasoning_model = config.get("models.reasoning.model", "Qwen/Qwen2.5-VL-7B-Instruct")
-                system_prompt = config.get("captioning.system_prompt", "")
-                context_diary = self.load_context_diary(project_name)
-                image_prompt = config.get("captioning.image_prompt", "")
-                video_prompt = config.get("captioning.video_prompt", "")
-                audio_prompt = config.get("captioning.audio_prompt", "")
-                return (captioner, reasoning_enabled, reasoning_model, system_prompt, context_diary, image_prompt, video_prompt, audio_prompt)
-            except Exception as e:
-                logger.error(f"Failed to load model settings: {e}")
+    def load_model_settings(self, project_name: str) -> Tuple[str, bool, str, str, str, str, str, str]:
+        """Load model settings and prompts for a project.
+        Returns: (captioner, reasoning_enabled, reasoning_model, system_prompt, context_diary, image_prompt, video_prompt, audio_prompt)
+        """
+        try:
+            if not project_name:
                 return ("", False, "", "", "", "", "", "")
+            layout = ProjectLayout(self.root_dir, project_name)
+            config = ProjectConfig(layout.project_config_file)
+            config.load()
+            captioner = config.get("models.captioner", "Qwen/Qwen2.5-VL-7B-Instruct")
+            reasoning_enabled = bool(config.get("models.reasoning.enabled", False))
+            reasoning_model = config.get("models.reasoning.model", "Qwen/Qwen2.5-VL-7B-Instruct")
+            system_prompt = config.get("captioning.system_prompt", "")
+            context_diary = self.load_context_diary(project_name)
+            image_prompt = config.get("captioning.image_prompt", "")
+            video_prompt = config.get("captioning.video_prompt", "")
+            audio_prompt = config.get("captioning.audio_prompt", "")
+            return (
+                captioner,
+                reasoning_enabled,
+                reasoning_model,
+                system_prompt,
+                context_diary,
+                image_prompt,
+                video_prompt,
+                audio_prompt,
+            )
+        except Exception as e:
+            logger.error(f"Failed to load model settings: {e}")
+            return ("", False, "", "", "", "", "", "")
 
-        def save_model_settings(self,
-                                project_name: str,
-                                captioner: str,
-                                reasoning_enabled: bool,
-                                reasoning_model: str,
-                                system_prompt: str,
-                                image_prompt: str,
-                                video_prompt: str,
-                                audio_prompt: str) -> str:
-            """Persist model selections and all prompts to project.json."""
-            try:
-                if not project_name:
-                    return "❌ Please select a project first"
-                layout = ProjectLayout(self.root_dir, project_name)
-                config = ProjectConfig(layout.project_config_file)
-                config.load()
-                config.set("models.captioner", captioner)
-                config.set("models.reasoning.enabled", bool(reasoning_enabled))
-                config.set("models.reasoning.model", reasoning_model)
-                config.set("captioning.system_prompt", (system_prompt or "").strip())
-                config.set("captioning.image_prompt", (image_prompt or "").strip())
-                config.set("captioning.video_prompt", (video_prompt or "").strip())
-                config.set("captioning.audio_prompt", (audio_prompt or "").strip())
-                config.save()
-                logger.info(f"Saved model settings and agentic prompts for '{project_name}': captioner={captioner}")
-                return "✅ Model settings and prompts saved"
-            except Exception as e:
-                logger.error(f"Failed to save model settings: {e}")
-                return f"❌ Error saving model settings: {str(e)}"
+    def save_model_settings(
+        self,
+        project_name: str,
+        captioner: str,
+        reasoning_enabled: bool,
+        reasoning_model: str,
+        system_prompt: str,
+        image_prompt: str,
+        video_prompt: str,
+        audio_prompt: str,
+    ) -> str:
+        """Persist model selections and all prompts to project.json."""
+        try:
+            if not project_name:
+                return "❌ Please select a project first"
+            layout = ProjectLayout(self.root_dir, project_name)
+            config = ProjectConfig(layout.project_config_file)
+            config.load()
+            config.set("models.captioner", captioner)
+            config.set("models.reasoning.enabled", bool(reasoning_enabled))
+            config.set("models.reasoning.model", reasoning_model)
+            config.set("captioning.system_prompt", (system_prompt or "").strip())
+            config.set("captioning.image_prompt", (image_prompt or "").strip())
+            config.set("captioning.video_prompt", (video_prompt or "").strip())
+            config.set("captioning.audio_prompt", (audio_prompt or "").strip())
+            config.save()
+            logger.info(
+                f"Saved model settings and agentic prompts for '{project_name}': captioner={captioner}"
+            )
+            return "✅ Model settings and prompts saved"
+        except Exception as e:
+            logger.error(f"Failed to save model settings: {e}")
+            return f"❌ Error saving model settings: {str(e)}"
 
-        def get_run_logs_path(self, project_name: str) -> Tuple[str, str]:
-            """Return path to run_logs.jsonl for download (as two outputs)."""
-            try:
-                if not project_name:
-                    return ("", "")
-                layout = ProjectLayout(self.root_dir, project_name)
-                path = str(layout.run_logs_file)
-                return (path, path)
-            except Exception as e:
-                logger.error(f"Failed to resolve run logs path: {e}")
+    def get_run_logs_path(self, project_name: str) -> Tuple[str, str]:
+        """Return path to run_logs.jsonl for download (as two outputs)."""
+        try:
+            if not project_name:
                 return ("", "")
+            layout = ProjectLayout(self.root_dir, project_name)
+            path = str(layout.run_logs_file)
+            return (path, path)
+        except Exception as e:
+            logger.error(f"Failed to resolve run logs path: {e}")
+            return ("", "")
 
-        def get_error_summary(self, project_name: str) -> str:
-            """Get a summary of recent errors from run logs."""
-            try:
-                if not project_name:
-                    return "No project selected"
-                layout = ProjectLayout(self.root_dir, project_name)
-                if not layout.run_logs_file.exists():
-                    return "No processing logs found"
+    def get_error_summary(self, project_name: str) -> str:
+        """Get a summary of recent errors from run logs."""
+        try:
+            if not project_name:
+                return "No project selected"
+            layout = ProjectLayout(self.root_dir, project_name)
+            if not layout.run_logs_file.exists():
+                return "No processing logs found"
 
-                # Read recent log entries
-                with open(layout.run_logs_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
+            # Read recent log entries
+            with open(layout.run_logs_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
 
-                # Get last 10 entries and check for errors
-                recent_lines = lines[-10:] if len(lines) > 10 else lines
-                errors = []
+            # Get last 10 entries and check for errors
+            recent_lines = lines[-10:] if len(lines) > 10 else lines
+            errors = []
 
-                for line in recent_lines:
-                    try:
-                        entry = json.loads(line.strip())
-                        if not entry.get("success", True) and "error" in entry:
-                            errors.append(f"• {entry.get('source', 'Unknown')}: {entry['error']}")
-                    except json.JSONDecodeError:
-                        continue
+            for line in recent_lines:
+                try:
+                    entry = json.loads(line.strip())
+                    if not entry.get("success", True) and "error" in entry:
+                        errors.append(f"• {entry.get('source', 'Unknown')}: {entry['error']}")
+                except json.JSONDecodeError:
+                    continue
 
-                if errors:
-                    return f"Recent errors ({len(errors)}):\n" + "\n".join(errors[-5:])
-                else:
-                    return "✅ No recent errors found"
+            if errors:
+                return f"Recent errors ({len(errors)}):\n" + "\n".join(errors[-5:])
+            else:
+                return "✅ No recent errors found"
 
-            except Exception as e:
-                logger.error(f"Failed to get error summary: {e}")
-                return f"Error reading logs: {str(e)}"
+        except Exception as e:
+            logger.error(f"Failed to get error summary: {e}")
+            return f"Error reading logs: {str(e)}"
 
     def build_interface(self) -> gr.Blocks:
         """Build the Gradio interface.

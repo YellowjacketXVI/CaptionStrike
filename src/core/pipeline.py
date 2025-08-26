@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
 import traceback
+import concurrent.futures
+import threading
 
 from PIL import Image
 
@@ -189,25 +191,63 @@ class ProcessingPipeline:
             processed_count = 0
             errors = []
 
-            # Process each file
-            for raw_file in raw_files:
-                try:
-                    result = self._process_single_file(
-                        raw_file, layout, config, run_logger,
-                        reference_voice_clip, first_sound_ts, end_sound_ts,
-                        force_reprocess
-                    )
+            max_workers = int(config.get("processing.max_workers", 1))
+            log_lock = threading.Lock()
 
-                    if result["success"]:
-                        processed_count += 1
-                    else:
-                        errors.append(f"{raw_file.name}: {result.get('error', 'Unknown error')}")
+            def handle_result(raw_file: Path, result: Dict[str, Any]) -> None:
+                nonlocal processed_count, errors
+                if result["success"]:
+                    processed_count += 1
+                else:
+                    errors.append(f"{raw_file.name}: {result.get('error', 'Unknown error')}")
 
-                except Exception as e:
-                    error_msg = f"{raw_file.name}: {str(e)}"
-                    errors.append(error_msg)
-                    logger.error(f"Failed to process {raw_file}: {e}")
-                    logger.debug(traceback.format_exc())
+            if max_workers > 1:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_map = {
+                        executor.submit(
+                            self._process_single_file,
+                            raw_file,
+                            layout,
+                            config,
+                            run_logger,
+                            reference_voice_clip,
+                            first_sound_ts,
+                            end_sound_ts,
+                            force_reprocess,
+                            log_lock,
+                        ): raw_file
+                        for raw_file in raw_files
+                    }
+                    for future in concurrent.futures.as_completed(future_map):
+                        raw_file = future_map[future]
+                        try:
+                            result = future.result()
+                            handle_result(raw_file, result)
+                        except Exception as e:
+                            error_msg = f"{raw_file.name}: {str(e)}"
+                            errors.append(error_msg)
+                            logger.error(f"Failed to process {raw_file}: {e}")
+                            logger.debug(traceback.format_exc())
+            else:
+                for raw_file in raw_files:
+                    try:
+                        result = self._process_single_file(
+                            raw_file,
+                            layout,
+                            config,
+                            run_logger,
+                            reference_voice_clip,
+                            first_sound_ts,
+                            end_sound_ts,
+                            force_reprocess,
+                            log_lock,
+                        )
+                        handle_result(raw_file, result)
+                    except Exception as e:
+                        error_msg = f"{raw_file.name}: {str(e)}"
+                        errors.append(error_msg)
+                        logger.error(f"Failed to process {raw_file}: {e}")
+                        logger.debug(traceback.format_exc())
 
             # Generate thumbnails
             self._generate_thumbnails(layout)
@@ -229,15 +269,18 @@ class ProcessingPipeline:
                 "errors": [str(e)]
             }
 
-    def _process_single_file(self,
-                           raw_file: Path,
-                           layout: ProjectLayout,
-                           config: ProjectConfig,
-                           run_logger: Optional[RunLogger],
-                           reference_voice_clip: Optional[Path],
-                           first_sound_ts: Optional[float],
-                           end_sound_ts: Optional[float],
-                           force_reprocess: bool) -> Dict[str, Any]:
+    def _process_single_file(
+        self,
+        raw_file: Path,
+        layout: ProjectLayout,
+        config: ProjectConfig,
+        run_logger: Optional[RunLogger],
+        reference_voice_clip: Optional[Path],
+        first_sound_ts: Optional[float],
+        end_sound_ts: Optional[float],
+        force_reprocess: bool,
+        log_lock: Optional[threading.Lock] = None,
+    ) -> Dict[str, Any]:
         """Process a single media file.
 
         Args:
@@ -307,7 +350,11 @@ class ProcessingPipeline:
                 log_entry["error"] = result.get("error", "Unknown error")
 
             if run_logger:
-                run_logger.log_item(log_entry)
+                if log_lock:
+                    with log_lock:
+                        run_logger.log_item(log_entry)
+                else:
+                    run_logger.log_item(log_entry)
 
             return result
 
@@ -353,11 +400,9 @@ class ProcessingPipeline:
                 else:
                     # Florence fallback/choice
                     florence = self._load_florence_captioner(config)
-                    # Expose prompt to Florence via env var fallback used by adapter
-                    import os
-                    if system_prompt:
-                        os.environ["CAPTIONSTRIKE_SYSTEM_PROMPT"] = system_prompt
-                    analysis = florence.analyze_image_comprehensive(converted_file)
+                    analysis = florence.analyze_image_comprehensive(
+                        converted_file, system_prompt=system_prompt
+                    )
                     caption = analysis["caption"]
             except Exception as e:
                 logger.warning(f"Primary captioner failed: {e}")

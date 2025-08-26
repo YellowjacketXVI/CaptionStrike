@@ -152,11 +152,14 @@ class PersonIsolator:
             logger.error(f"Failed to detect faces: {e}")
             return []
     
-    def crop_faces(self, 
-                   image: Union[Image.Image, np.ndarray, Path, str],
-                   output_dir: Path,
-                   base_name: str,
-                   padding_ratio: float = 0.3) -> List[Path]:
+    def crop_faces(
+        self,
+        image: Union[Image.Image, np.ndarray, Path, str],
+        output_dir: Path,
+        base_name: str,
+        padding_ratio: float = 0.3,
+        faces: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Path]:
         """Crop detected faces from image.
         
         Args:
@@ -183,9 +186,10 @@ class PersonIsolator:
                 raise ValueError("Unsupported image format")
             image_path = None
         
-        # Detect faces
-        faces = self.detect_faces(pil_image)
-        
+        # Detect faces if not provided
+        if faces is None:
+            faces = self.detect_faces(pil_image)
+
         if not faces:
             logger.info("No faces detected for cropping")
             return []
@@ -325,7 +329,7 @@ class PersonIsolator:
             crops_dir.mkdir(parents=True, exist_ok=True)
             
             # Crop faces
-            crop_paths = self.crop_faces(pil_image, crops_dir, base_name)
+            crop_paths = self.crop_faces(pil_image, crops_dir, base_name, faces=faces)
             
             # Optional SAM segmentation
             segmented_paths = []
