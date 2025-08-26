@@ -110,7 +110,7 @@ def check_file_structure():
         "src/core/pipeline.py",
         "src/adapters/florence2_captioner.py",
         "src/ui/app.py",
-        "tests/smoke_test.py"
+        "tests/test_smoke.py"
     ]
     
     print("\n📁 Checking file structure...")
@@ -237,7 +237,7 @@ def main():
         print("   1. Run: python app.py --root 'D:/Datasets' --models_dir './models'")
         print("   2. Open browser to: http://localhost:7860")
         print("   3. Create a project and start processing media!")
-        print("\n💡 For detailed testing, run: python tests/smoke_test.py")
+        print("\n💡 For detailed testing, run: pytest")
         return 0
     else:
         print(f"\n❌ {total - passed} validation check(s) failed")

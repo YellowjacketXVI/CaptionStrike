@@ -74,21 +74,22 @@ class MediaProcessor:
             Path: Actual output path with .png extension
         """
         try:
-            img = Image.open(src_path)
-            # Convert to RGB if necessary (handles RGBA, P mode, etc.)
-            if img.mode in ('RGBA', 'LA', 'P'):
-                # Create white background for transparency
-                background = Image.new('RGB', img.size, (255, 255, 255))
-                if img.mode == 'P':
-                    img = img.convert('RGBA')
-                background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
-                img = background
-            elif img.mode != 'RGB':
-                img = img.convert('RGB')
-            
-            output_path = dst_path.with_suffix('.png')
-            img.save(output_path, 'PNG', optimize=True)
-            return output_path
+            with Image.open(src_path) as img:
+                img = img.copy()
+                # Convert to RGB if necessary (handles RGBA, P mode, etc.)
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    # Create white background for transparency
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    if img.mode == 'P':
+                        img = img.convert('RGBA')
+                    background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+                    img = background
+                elif img.mode != 'RGB':
+                    img = img.convert('RGB')
+
+                output_path = dst_path.with_suffix('.png')
+                img.save(output_path, 'PNG', optimize=True)
+                return output_path
         except Exception as e:
             logger.error(f"Failed to convert image {src_path} to PNG: {e}")
             raise
@@ -106,22 +107,27 @@ class MediaProcessor:
         """
         try:
             output_path = dst_path.with_suffix('.mp4')
-            (
-                ffmpeg
-                .input(str(src_path))
-                .output(
-                    str(output_path),
-                    vcodec='libx264',
-                    acodec='aac',
-                    strict='-2',
-                    movflags='faststart',
-                    preset='medium',
-                    crf=23
+            try:
+                (
+                    ffmpeg
+                    .input(str(src_path))
+                    .output(
+                        str(output_path),
+                        vcodec='libx264',
+                        acodec='aac',
+                        strict='-2',
+                        movflags='faststart',
+                        preset='medium',
+                        crf=23
+                    )
+                    .overwrite_output()
+                    .run(quiet=True, capture_stdout=True, capture_stderr=True)
                 )
-                .overwrite_output()
-                .run(quiet=True, capture_stdout=True)
-            )
-            return output_path
+                return output_path
+            except ffmpeg.Error as e:
+                stderr = e.stderr.decode() if e.stderr else str(e)
+                logger.error(f"Failed to convert video {src_path} to MP4: {stderr}")
+                raise
         except Exception as e:
             logger.error(f"Failed to convert video {src_path} to MP4: {e}")
             raise
@@ -159,14 +165,19 @@ class MediaProcessor:
             PIL.Image: Extracted frame
         """
         try:
-            out, _ = (
+            out, err = (
                 ffmpeg
                 .input(str(video_path), ss=timestamp)
                 .filter('scale', 640, -1)  # Scale to 640px width, maintain aspect ratio
                 .output('pipe:', vframes=1, format='image2', vcodec='mjpeg')
                 .run(capture_stdout=True, capture_stderr=True, quiet=True)
             )
-            return Image.open(io.BytesIO(out))
+            with Image.open(io.BytesIO(out)) as img:
+                return img.copy()
+        except ffmpeg.Error as e:
+            stderr = e.stderr.decode() if e.stderr else str(e)
+            logger.error(f"Failed to extract frame from {video_path}: {stderr}")
+            raise
         except Exception as e:
             logger.error(f"Failed to extract frame from {video_path}: {e}")
             raise
