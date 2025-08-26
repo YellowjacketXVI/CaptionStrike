@@ -144,27 +144,17 @@ class CaptionStrikeUI:
                       first_sound_ts: Optional[float],
                       end_sound_ts: Optional[float],
                       force_reprocess: bool = False,
-                      system_prompt: str = "") -> str:
-        """Run the processing pipeline on a project.
-
-        Args:
-            project_name: Name of the project
-            use_person_isolation: Whether to enable person isolation
-            reference_voice_clip: Path to reference voice clip
-            first_sound_ts: Start timestamp for audio reference
-            end_sound_ts: End timestamp for audio reference
-            force_reprocess: Whether to force reprocessing
-
-        Returns:
-            Status message
-        """
+                      system_prompt: str = ""):
+        """Run the processing pipeline on a project with streaming updates."""
         try:
             if not project_name:
-                return "❌ Please select a project first"
+                yield "❌ Please select a project first"
+                return
 
             layout = ProjectLayout(self.root_dir, project_name)
             if not layout.exists():
-                return f"❌ Project '{project_name}' does not exist"
+                yield f"❌ Project '{project_name}' does not exist"
+                return
 
             # Update project configuration
             config = ProjectConfig(layout.project_config_file)
@@ -177,44 +167,78 @@ class CaptionStrikeUI:
             # Prepare audio processing parameters
             ref_clip = Path(reference_voice_clip) if reference_voice_clip and reference_voice_clip.strip() else None
 
-            # Run processing pipeline
-            logger.info(f"Starting processing for project '{project_name}'")
-            result = self.pipeline.process_project(
-                layout=layout,
-                reference_voice_clip=ref_clip,
-                first_sound_ts=first_sound_ts,
-                end_sound_ts=end_sound_ts,
-                force_reprocess=force_reprocess
-            )
+            # Get files to process for progress tracking
+            raw_files = layout.get_raw_files()
+            total_files = len(raw_files)
 
-            if result["success"]:
-                message = f"✅ {result['message']}"
-                if result["errors"]:
-                    message += f"\n⚠️ {len(result['errors'])} error(s):\n" + "\n".join(result["errors"][:3])
-                return message
+            if total_files == 0:
+                yield "❌ No files to process"
+                return
+
+            yield f"🚀 Starting processing for project '{project_name}'\n📁 Found {total_files} files to process..."
+
+            # Run processing pipeline with streaming updates
+            logger.info(f"Starting processing for project '{project_name}'")
+
+            processed_count = 0
+            errors = []
+
+            for i, raw_file in enumerate(raw_files, 1):
+                try:
+                    yield f"🔄 Processing {i}/{total_files}: {raw_file.name}..."
+
+                    # Process single file (simplified version of pipeline logic)
+                    result = self.pipeline._process_single_file(
+                        raw_file, layout, config, None,
+                        ref_clip, first_sound_ts, end_sound_ts, force_reprocess
+                    )
+
+                    if result["success"]:
+                        processed_count += 1
+                        yield f"✅ Completed {i}/{total_files}: {raw_file.name}"
+                    else:
+                        error_msg = f"{raw_file.name}: {result.get('error', 'Unknown error')}"
+                        errors.append(error_msg)
+                        yield f"❌ Failed {i}/{total_files}: {error_msg}"
+
+                except Exception as e:
+                    error_msg = f"{raw_file.name}: {str(e)}"
+                    errors.append(error_msg)
+                    yield f"❌ Error {i}/{total_files}: {error_msg}"
+
+            # Final summary
+            if processed_count > 0:
+                message = f"✅ Processing complete! Successfully processed {processed_count}/{total_files} files."
+                if errors:
+                    message += f"\n⚠️ {len(errors)} error(s) occurred:\n" + "\n".join(errors[:3])
+                    if len(errors) > 3:
+                        message += f"\n... and {len(errors) - 3} more errors"
+                yield message
             else:
-                return f"❌ Processing failed: {result['message']}"
+                yield f"❌ Processing failed: No files were successfully processed"
 
         except Exception as e:
             logger.error(f"Processing failed: {e}")
-            return f"❌ Processing error: {str(e)}"
+            yield f"❌ Processing error: {str(e)}"
 
-    def load_project_gallery(self, project_name: str) -> Tuple[gr.Gallery, str]:
-        """Load project gallery with thumbnails.
+    def load_project_gallery(self, project_name: str, page: int = 1, items_per_page: int = 20) -> Tuple[gr.Gallery, str, int, int]:
+        """Load project gallery with pagination.
 
         Args:
             project_name: Name of the project
+            page: Current page number (1-based)
+            items_per_page: Number of items per page
 
         Returns:
-            Tuple of (gallery component, status message)
+            Tuple of (gallery component, status message, current_page, total_pages)
         """
         try:
             if not project_name:
-                return gr.Gallery(value=[]), "Please select a project"
+                return gr.Gallery(value=[]), "Please select a project", 1, 1
 
             layout = ProjectLayout(self.root_dir, project_name)
             if not layout.exists():
-                return gr.Gallery(value=[]), f"Project '{project_name}' does not exist"
+                return gr.Gallery(value=[]), f"Project '{project_name}' does not exist", 1, 1
 
             # Get thumbnails
             thumbnails = layout.get_thumbnails()
@@ -222,36 +246,49 @@ class CaptionStrikeUI:
             if not thumbnails:
                 # If no thumbnails, try to show raw images
                 raw_images = layout.get_raw_files("image")
-                gallery_items = []
-                for img_path in raw_images[:20]:  # Limit to 20 for performance
-                    try:
-                        # Create a simple thumbnail
-                        img = Image.open(img_path)
-                        img.thumbnail((256, 256))
-                        gallery_items.append((str(img_path), img_path.stem))
-                    except Exception:
-                        continue
+                all_items = [(str(img_path), img_path.stem) for img_path in raw_images]
+                status_prefix = "raw images (run processing to generate thumbnails)"
+            else:
+                # Create gallery items from thumbnails
+                all_items = [(str(thumb_path), thumb_path.stem) for thumb_path in sorted(thumbnails)]
+                status_prefix = "processed items"
 
-                if gallery_items:
-                    return gr.Gallery(value=gallery_items), f"Showing {len(gallery_items)} raw images (run processing to generate thumbnails)"
-                else:
-                    return gr.Gallery(value=[]), "No images found in project"
+            if not all_items:
+                return gr.Gallery(value=[]), "No images found in project", 1, 1
 
-            # Create gallery items from thumbnails
-            gallery_items = []
-            for thumb_path in sorted(thumbnails):
-                # Find corresponding processed file
-                processed_name = thumb_path.stem
-                gallery_items.append((str(thumb_path), processed_name))
+            # Calculate pagination
+            total_items = len(all_items)
+            total_pages = max(1, (total_items + items_per_page - 1) // items_per_page)
+            page = max(1, min(page, total_pages))  # Clamp page to valid range
+
+            # Get items for current page
+            start_idx = (page - 1) * items_per_page
+            end_idx = min(start_idx + items_per_page, total_items)
+            page_items = all_items[start_idx:end_idx]
+
+            status = f"Page {page}/{total_pages} - Showing {len(page_items)} of {total_items} {status_prefix}"
 
             return (
-                gr.Gallery(value=gallery_items),
-                f"Loaded {len(gallery_items)} processed items"
+                gr.Gallery(value=page_items),
+                status,
+                page,
+                total_pages
             )
 
         except Exception as e:
             logger.error(f"Failed to load gallery: {e}")
-            return gr.Gallery(value=[]), f"Error loading gallery: {str(e)}"
+            return gr.Gallery(value=[]), f"Error loading gallery: {str(e)}", 1, 1
+
+    def navigate_gallery(self, project_name: str, current_page: int, direction: str) -> Tuple[gr.Gallery, str, int, int]:
+        """Navigate gallery pages."""
+        if direction == "prev":
+            new_page = max(1, current_page - 1)
+        elif direction == "next":
+            new_page = current_page + 1
+        else:
+            new_page = current_page
+
+        return self.load_project_gallery(project_name, new_page)
 
     def load_caption_for_editing(self, project_name: str, selected_image: str) -> str:
         """Load caption for the selected image.
@@ -437,33 +474,39 @@ class CaptionStrikeUI:
             """Return a Gradio update to enable/disable the Run button."""
             return gr.update(interactive=self.is_ready_to_run(project_name))
 
-        def load_model_settings(self, project_name: str) -> Tuple[str, bool, str, str, str]:
+        def load_model_settings(self, project_name: str) -> Tuple[str, bool, str, str, str, str, str, str]:
             """Load model settings and prompts for a project.
-            Returns: (captioner, reasoning_enabled, reasoning_model, system_prompt, context_diary)
+            Returns: (captioner, reasoning_enabled, reasoning_model, system_prompt, context_diary, image_prompt, video_prompt, audio_prompt)
             """
             try:
                 if not project_name:
-                    return ("", False, "", "", "")
+                    return ("", False, "", "", "", "", "", "")
                 layout = ProjectLayout(self.root_dir, project_name)
                 config = ProjectConfig(layout.project_config_file)
                 config.load()
-                captioner = config.get("models.captioner", "microsoft/Florence-2-base")
+                captioner = config.get("models.captioner", "Qwen/Qwen2.5-VL-7B-Instruct")
                 reasoning_enabled = bool(config.get("models.reasoning.enabled", False))
                 reasoning_model = config.get("models.reasoning.model", "Qwen/Qwen2.5-VL-7B-Instruct")
                 system_prompt = config.get("captioning.system_prompt", "")
                 context_diary = self.load_context_diary(project_name)
-                return (captioner, reasoning_enabled, reasoning_model, system_prompt, context_diary)
+                image_prompt = config.get("captioning.image_prompt", "")
+                video_prompt = config.get("captioning.video_prompt", "")
+                audio_prompt = config.get("captioning.audio_prompt", "")
+                return (captioner, reasoning_enabled, reasoning_model, system_prompt, context_diary, image_prompt, video_prompt, audio_prompt)
             except Exception as e:
                 logger.error(f"Failed to load model settings: {e}")
-                return ("", False, "", "", "")
+                return ("", False, "", "", "", "", "", "")
 
         def save_model_settings(self,
                                 project_name: str,
                                 captioner: str,
                                 reasoning_enabled: bool,
                                 reasoning_model: str,
-                                system_prompt: str) -> str:
-            """Persist model selections and system prompt to project.json."""
+                                system_prompt: str,
+                                image_prompt: str,
+                                video_prompt: str,
+                                audio_prompt: str) -> str:
+            """Persist model selections and all prompts to project.json."""
             try:
                 if not project_name:
                     return "❌ Please select a project first"
@@ -474,9 +517,12 @@ class CaptionStrikeUI:
                 config.set("models.reasoning.enabled", bool(reasoning_enabled))
                 config.set("models.reasoning.model", reasoning_model)
                 config.set("captioning.system_prompt", (system_prompt or "").strip())
+                config.set("captioning.image_prompt", (image_prompt or "").strip())
+                config.set("captioning.video_prompt", (video_prompt or "").strip())
+                config.set("captioning.audio_prompt", (audio_prompt or "").strip())
                 config.save()
-                logger.info(f"Saved model settings for '{project_name}': captioner={captioner}, reasoning_enabled={reasoning_enabled}, reasoning_model={reasoning_model}")
-                return "✅ Model settings saved"
+                logger.info(f"Saved model settings and agentic prompts for '{project_name}': captioner={captioner}")
+                return "✅ Model settings and prompts saved"
             except Exception as e:
                 logger.error(f"Failed to save model settings: {e}")
                 return f"❌ Error saving model settings: {str(e)}"
@@ -492,6 +538,40 @@ class CaptionStrikeUI:
             except Exception as e:
                 logger.error(f"Failed to resolve run logs path: {e}")
                 return ("", "")
+
+        def get_error_summary(self, project_name: str) -> str:
+            """Get a summary of recent errors from run logs."""
+            try:
+                if not project_name:
+                    return "No project selected"
+                layout = ProjectLayout(self.root_dir, project_name)
+                if not layout.run_logs_file.exists():
+                    return "No processing logs found"
+
+                # Read recent log entries
+                with open(layout.run_logs_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+
+                # Get last 10 entries and check for errors
+                recent_lines = lines[-10:] if len(lines) > 10 else lines
+                errors = []
+
+                for line in recent_lines:
+                    try:
+                        entry = json.loads(line.strip())
+                        if not entry.get("success", True) and "error" in entry:
+                            errors.append(f"• {entry.get('source', 'Unknown')}: {entry['error']}")
+                    except json.JSONDecodeError:
+                        continue
+
+                if errors:
+                    return f"Recent errors ({len(errors)}):\n" + "\n".join(errors[-5:])
+                else:
+                    return "✅ No recent errors found"
+
+            except Exception as e:
+                logger.error(f"Failed to get error summary: {e}")
+                return f"Error reading logs: {str(e)}"
 
     def build_interface(self) -> gr.Blocks:
         """Build the Gradio interface.
@@ -580,13 +660,32 @@ class CaptionStrikeUI:
                             system_prompt = gr.Textbox(
                                 label="System prompt (optional)",
                                 placeholder="Provide a system prompt to guide captioning...",
-                                lines=3
+                                lines=2
                             )
+
+                            # Agentic prompts per media type
+                            gr.Markdown("### 🎯 Agentic Prompts per Media Type")
+                            image_prompt = gr.Textbox(
+                                label="Image Prompt",
+                                placeholder="Describe the subject, setting, lighting, and mood...",
+                                lines=2
+                            )
+                            video_prompt = gr.Textbox(
+                                label="Video Prompt",
+                                placeholder="Describe the action and context shown in this video frame...",
+                                lines=2
+                            )
+                            audio_prompt = gr.Textbox(
+                                label="Audio Prompt",
+                                placeholder="Summarize the key points and context from this conversation...",
+                                lines=2
+                            )
+
                             # Context/Diary
                             context_diary = gr.Textbox(
                                 label="Project Context / Diary",
                                 placeholder="Notes, goals, constraints. Will be saved to meta/context.txt and appended to prompts.",
-                                lines=6
+                                lines=4
                             )
                             with gr.Row():
                                 save_context_btn = gr.Button("Save Context", variant="secondary")
@@ -596,10 +695,13 @@ class CaptionStrikeUI:
                             captioner_model = gr.Dropdown(
                                 label="Captioner Model",
                                 choices=[
+                                    "Qwen/Qwen2.5-VL-7B-Instruct",
+                                    "Qwen/Qwen2.5-VL-3B-Instruct",
+                                    "Qwen/Qwen2.5-VL-2B-Instruct",
                                     "microsoft/Florence-2-base",
                                     "microsoft/Florence-2-large"
                                 ],
-                                value="microsoft/Florence-2-base"
+                                value="Qwen/Qwen2.5-VL-7B-Instruct"
                             )
                             reasoning_enabled = gr.Checkbox(
                                 label="Enable Qwen Reasoning",
@@ -652,6 +754,14 @@ class CaptionStrikeUI:
                                 interactive=False,
                                 scale=2
                             )
+
+                        # Pagination controls
+                        with gr.Row():
+                            prev_page_btn = gr.Button("◀ Previous", size="sm")
+                            current_page = gr.Number(label="Page", value=1, precision=0, minimum=1)
+                            total_pages = gr.Number(label="Total", value=1, precision=0, interactive=False)
+                            next_page_btn = gr.Button("Next ▶", size="sm")
+
                         gallery = gr.Gallery(
                             label="Processed Media",
                             show_label=True,
@@ -677,7 +787,16 @@ class CaptionStrikeUI:
                                 interactive=False,
                                 scale=2
                             )
-                        # Logs download
+                        # Error summary and logs
+                        gr.Markdown("### 🔍 Error Summary")
+                        error_summary = gr.Textbox(
+                            label="Recent Errors",
+                            lines=4,
+                            interactive=False,
+                            placeholder="No errors to display"
+                        )
+                        refresh_errors_btn = gr.Button("🔄 Refresh Errors", size="sm")
+
                         logs_path = gr.Textbox(label="Run Logs Path", interactive=False)
                         download_logs = gr.File(label="Download run_logs.jsonl", interactive=False)
 
@@ -711,7 +830,7 @@ class CaptionStrikeUI:
             ).then(
                 fn=self.load_model_settings,
                 inputs=[project_dropdown],
-                outputs=[captioner_model, reasoning_enabled, reasoning_model, system_prompt, context_diary]
+                outputs=[captioner_model, reasoning_enabled, reasoning_model, system_prompt, context_diary, image_prompt, video_prompt, audio_prompt]
             ).then(
                 fn=self.get_run_logs_path,
                 inputs=[project_dropdown],
@@ -760,15 +879,34 @@ class CaptionStrikeUI:
                 outputs=[project_stats]
             ).then(
                 fn=self.load_project_gallery,
-                inputs=[project_dropdown],
-                outputs=[gallery, gallery_status]
+                inputs=[project_dropdown, gr.State(1)],
+                outputs=[gallery, gallery_status, current_page, total_pages]
             )
 
             # Gallery loading
             load_gallery_btn.click(
                 fn=self.load_project_gallery,
-                inputs=[project_dropdown],
-                outputs=[gallery, gallery_status]
+                inputs=[project_dropdown, current_page],
+                outputs=[gallery, gallery_status, current_page, total_pages]
+            )
+
+            # Pagination controls
+            prev_page_btn.click(
+                fn=self.navigate_gallery,
+                inputs=[project_dropdown, current_page, gr.State("prev")],
+                outputs=[gallery, gallery_status, current_page, total_pages]
+            )
+
+            next_page_btn.click(
+                fn=self.navigate_gallery,
+                inputs=[project_dropdown, current_page, gr.State("next")],
+                outputs=[gallery, gallery_status, current_page, total_pages]
+            )
+
+            current_page.change(
+                fn=self.load_project_gallery,
+                inputs=[project_dropdown, current_page],
+                outputs=[gallery, gallery_status, current_page, total_pages]
             )
 
             # Gallery selection for caption editing
@@ -789,7 +927,7 @@ class CaptionStrikeUI:
             # Save model settings and context
             save_models_btn.click(
                 fn=self.save_model_settings,
-                inputs=[project_dropdown, captioner_model, reasoning_enabled, reasoning_model, system_prompt],
+                inputs=[project_dropdown, captioner_model, reasoning_enabled, reasoning_model, system_prompt, image_prompt, video_prompt, audio_prompt],
                 outputs=[save_models_status]
             )
             save_context_btn.click(
@@ -803,6 +941,20 @@ class CaptionStrikeUI:
                 fn=self.compute_run_button_state,
                 inputs=[project_dropdown],
                 outputs=[run_btn]
+            )
+
+            # Error summary refresh
+            refresh_errors_btn.click(
+                fn=self.get_error_summary,
+                inputs=[project_dropdown],
+                outputs=[error_summary]
+            )
+
+            # Auto-load error summary when project changes
+            project_dropdown.change(
+                fn=self.get_error_summary,
+                inputs=[project_dropdown],
+                outputs=[error_summary]
             )
 
         return interface

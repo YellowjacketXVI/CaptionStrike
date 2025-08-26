@@ -46,7 +46,7 @@ def download_qwen_model(model_name: str, cache_dir: Path) -> None:
 
 
 class QwenVLReasoner:
-    """Qwen2.5-VL model adapter for enhanced caption reasoning."""
+    """Qwen2.5-VL model adapter for primary captioning and enhanced reasoning."""
 
     # Available model variants
     MODELS = {
@@ -133,115 +133,88 @@ class QwenVLReasoner:
         except Exception as e:
             logger.error(f"Failed to load Qwen2.5-VL model: {e}")
             raise
-    
-    def refine_caption(self, 
-                      original_caption: str, 
-                      image: Union[Image.Image, Path, str],
-                      context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Refine an existing caption using visual reasoning.
-        
-        Args:
-            original_caption: Original caption from Florence-2
-            image: PIL Image, file path, or path string
-            context: Optional context information (objects, tags, etc.)
-            
-        Returns:
-            Dict with refined caption and reasoning metadata
-        """
+    def _ensure_image(self, image: Union[Image.Image, Path, str]) -> Image.Image:
+        if isinstance(image, (str, Path)):
+            return Image.open(image).convert('RGB')
+        if isinstance(image, Image.Image):
+            return image
+        raise ValueError("Image must be PIL Image or file path")
+
+    def _messages(self, image: Image.Image, prompt: str):
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+
+    def generate_caption(self, image: Union[Image.Image, Path, str], prompt: Optional[str] = None) -> Dict[str, Any]:
+        """Generate a caption directly with Qwen (primary captioning)."""
         if not self._loaded:
             self.load_model()
-        
-        # Load image if path provided
-        if isinstance(image, (str, Path)):
-            image = Image.open(image).convert('RGB')
-        elif not isinstance(image, Image.Image):
-            raise ValueError("Image must be PIL Image or file path")
-        
+        image = self._ensure_image(image)
         try:
-            # Construct reasoning prompt
-            prompt = self._build_refinement_prompt(original_caption, context)
-            
-            # Prepare messages for Qwen2.5-VL
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": image},
-                        {"type": "text", "text": prompt}
-                    ]
-                }
-            ]
-            
-            # Process inputs
-            text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+            default_prompt = (
+                (prompt or "Describe the subject, setting, lighting and mood of this image in one concise sentence.")
             )
-            
+            messages = self._messages(image, default_prompt)
+            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             image_inputs, video_inputs = self._process_vision_info(messages)
-            inputs = self.processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt"
-            )
-            inputs = inputs.to(self.device)
-            
-            # Generate response
+            inputs = self.processor(text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt").to(self.device)
             with torch.no_grad():
-                generated_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=256,
-                    do_sample=True,
-                    temperature=0.7,
-                    top_p=0.9
-                )
-            
-            # Decode response
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-            ]
-            
-            refined_caption = self.processor.batch_decode(
-                generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-            )[0]
-            
-            # Clean up the response
+                generated_ids = self.model.generate(**inputs, max_new_tokens=128, do_sample=True, temperature=0.6, top_p=0.9)
+            generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
+            caption = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+            caption = self._clean_response(caption)
+            return {"caption": caption, "success": True}
+        except Exception as e:
+            logger.error(f"Failed to generate caption: {e}")
+            return {"caption": "", "success": False, "error": str(e)}
+
+
+    def refine_caption(self,
+                      original_caption: str,
+                      image: Union[Image.Image, Path, str],
+                      context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Refine an existing caption using visual reasoning."""
+        if not self._loaded:
+            self.load_model()
+        image = self._ensure_image(image)
+        try:
+            prompt = self._build_refinement_prompt(original_caption, context)
+            messages = self._messages(image, prompt)
+            text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            image_inputs, video_inputs = self._process_vision_info(messages)
+            inputs = self.processor(text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt").to(self.device)
+            with torch.no_grad():
+                generated_ids = self.model.generate(**inputs, max_new_tokens=256, do_sample=True, temperature=0.7, top_p=0.9)
+            generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
+            refined_caption = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
             refined_caption = self._clean_response(refined_caption)
-            
-            return {
-                "refined_caption": refined_caption,
-                "original_caption": original_caption,
-                "improvement_detected": len(refined_caption) > len(original_caption) * 0.8,
-                "reasoning_success": True
-            }
-            
+            return {"refined_caption": refined_caption, "original_caption": original_caption, "improvement_detected": len(refined_caption) > len(original_caption) * 0.8, "reasoning_success": True}
         except Exception as e:
             logger.error(f"Failed to refine caption: {e}")
-            return {
-                "refined_caption": original_caption,  # Fallback to original
-                "original_caption": original_caption,
-                "improvement_detected": False,
-                "reasoning_success": False,
-                "error": str(e)
-            }
-    
+            return {"refined_caption": original_caption, "original_caption": original_caption, "improvement_detected": False, "reasoning_success": False, "error": str(e)}
+
     def analyze_image_detailed(self, image: Union[Image.Image, Path, str]) -> Dict[str, Any]:
         """Perform detailed image analysis with reasoning.
-        
+
         Args:
             image: PIL Image, file path, or path string
-            
+
         Returns:
             Dict with detailed analysis
         """
         if not self._loaded:
             self.load_model()
-        
+
         # Load image if path provided
         if isinstance(image, (str, Path)):
             image = Image.open(image).convert('RGB')
-        
+
         try:
             prompt = """Analyze this image in detail. Provide:
 1. A comprehensive one-sentence description focusing on the main subject, setting, lighting, and mood
@@ -249,7 +222,7 @@ class QwenVLReasoner:
 3. Visual style and composition notes
 
 Keep the description concise but informative, suitable for training data."""
-            
+
             # Prepare messages
             messages = [
                 {
@@ -260,12 +233,12 @@ Keep the description concise but informative, suitable for training data."""
                     ]
                 }
             ]
-            
+
             # Process and generate
             text = self.processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
-            
+
             image_inputs, video_inputs = self._process_vision_info(messages)
             inputs = self.processor(
                 text=[text],
@@ -275,7 +248,7 @@ Keep the description concise but informative, suitable for training data."""
                 return_tensors="pt"
             )
             inputs = inputs.to(self.device)
-            
+
             with torch.no_grad():
                 generated_ids = self.model.generate(
                     **inputs,
@@ -284,24 +257,24 @@ Keep the description concise but informative, suitable for training data."""
                     temperature=0.7,
                     top_p=0.9
                 )
-            
+
             generated_ids_trimmed = [
                 out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
             ]
-            
+
             analysis = self.processor.batch_decode(
                 generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
             )[0]
-            
+
             # Extract main caption from analysis
             main_caption = self._extract_main_caption(analysis)
-            
+
             return {
                 "caption": main_caption,
                 "detailed_analysis": analysis,
                 "analysis_success": True
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to analyze image: {e}")
             return {
@@ -310,14 +283,14 @@ Keep the description concise but informative, suitable for training data."""
                 "analysis_success": False,
                 "error": str(e)
             }
-    
+
     def _build_refinement_prompt(self, original_caption: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Build prompt for caption refinement.
-        
+
         Args:
             original_caption: Original caption to refine
             context: Optional context information
-            
+
         Returns:
             Refinement prompt string
         """
@@ -330,68 +303,68 @@ Please refine this caption to be more descriptive and accurate while keeping it 
 - Visual style and composition
 
 """
-        
+
         if context and "objects" in context:
             objects = [obj.get("label", "") for obj in context["objects"]]
             if objects:
                 prompt += f"Detected objects include: {', '.join(objects[:5])}\n"
-        
+
         prompt += "Provide only the refined caption, nothing else."
-        
+
         return prompt
-    
+
     def _clean_response(self, response: str) -> str:
         """Clean up model response to extract just the caption.
-        
+
         Args:
             response: Raw model response
-            
+
         Returns:
             Cleaned caption string
         """
         # Remove common prefixes and suffixes
         response = response.strip()
-        
+
         # Remove quotes if present
         if response.startswith('"') and response.endswith('"'):
             response = response[1:-1]
-        
+
         # Remove "Caption:" prefix if present
         if response.lower().startswith("caption:"):
             response = response[8:].strip()
-        
+
         # Take only the first sentence if multiple sentences
         sentences = response.split('. ')
         if len(sentences) > 1:
             response = sentences[0] + '.'
-        
+
         return response.strip()
-    
+
     def _extract_main_caption(self, analysis: str) -> str:
         """Extract main caption from detailed analysis.
-        
+
         Args:
             analysis: Full analysis text
-            
+
         Returns:
             Main caption string
         """
         # Look for numbered points and extract the first one
         lines = analysis.split('\n')
-        
+
         for line in lines:
             line = line.strip()
             if line.startswith('1.') or line.startswith('1)'):
                 caption = line[2:].strip()
                 return self._clean_response(caption)
-        
+
         # Fallback: take first sentence
         sentences = analysis.split('. ')
         if sentences:
             return self._clean_response(sentences[0] + '.')
-        
+
         return analysis[:200] + "..." if len(analysis) > 200 else analysis
-    
+
     def is_available(self) -> bool:
         """Check if Qwen2.5-VL model is available."""
         try:

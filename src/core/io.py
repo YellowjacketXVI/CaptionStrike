@@ -126,7 +126,7 @@ class ProjectConfig:
         "name": "",
         "created": "",
         "models": {
-            "captioner": "microsoft/Florence-2-base",
+            "captioner": "Qwen/Qwen2.5-VL-7B-Instruct",
             "reasoning": {
                 "enabled": False,
                 "model": "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -135,7 +135,10 @@ class ProjectConfig:
             "single_model": "openbmb/MiniCPM-V-2_6"
         },
         "captioning": {
-            "system_prompt": ""
+            "system_prompt": "",
+            "image_prompt": "Describe the subject, setting, lighting, and mood of this image in one detailed sentence. Focus on visual elements, composition, and atmosphere.",
+            "video_prompt": "Describe the action and context shown in this video frame in one sentence. Include what the subject is doing and the environment.",
+            "audio_prompt": "Summarize the key points and context from this conversation or audio content concisely."
         },
         "action": {
             "method": "first_frame",

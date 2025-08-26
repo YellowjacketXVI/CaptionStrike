@@ -1,11 +1,11 @@
 # CaptionStrike — Local Dataset Builder
 
-A local-first application for creating training datasets using **Florence-2** for automatic image captioning, tagging, and dataset organization. Build high-quality datasets with drag-and-drop simplicity and AI-powered automation.
+A local-first application for creating training datasets using **Qwen2.5-VL** (default) for image/video captioning and reasoning, with **Florence-2** as an optional alternative. Build high-quality datasets with drag-and-drop simplicity and AI-powered automation.
 
 ## ✨ Features
 
-- **🎯 Florence-2 Integration**: Primary perception model for captioning, tagging, and grounding
-- **🧠 Optional Reasoning**: Qwen2.5-VL-7B for enhanced caption refinement
+- **🎯 Qwen2.5-VL Integration**: Primary VLM for captioning and reasoning (7B default)
+- **🧠 Optional Alternative**: Florence-2 Base/Large for perception-first captioning
 - **🎵 Audio Processing**: Speaker diarization and isolation using pyannote.audio
 - **👤 Person Isolation**: Face detection with InsightFace + optional SAM refinement
 - **🖼️ Smart Conversion**: Auto-convert to standard formats (PNG/MP4/MP3)
@@ -91,7 +91,7 @@ Edit `<project>\meta\project.json` to customize:
 ```json
 {
   "models": {
-    "captioner": "microsoft/Florence-2-base",
+    "captioner": "Qwen/Qwen2.5-VL-7B-Instruct",
     "reasoning": {
       "enabled": false,
       "model": "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -110,14 +110,16 @@ Edit `<project>\meta\project.json` to customize:
 
 ## 🎯 Model Options
 
-### Primary Captioning (Florence-2)
-- `microsoft/Florence-2-base` (default, faster)
+### Primary Captioning (Qwen2.5-VL)
+- `Qwen/Qwen2.5-VL-7B-Instruct` (default)
+- `Qwen/Qwen2.5-VL-3B-Instruct` (lighter)
+- `Qwen/Qwen2.5-VL-2B-Instruct` (lightest)
+
+### Optional Alternative (Florence-2)
+- `microsoft/Florence-2-base` (faster)
 - `microsoft/Florence-2-large` (more detailed)
 
-### Optional Reasoning Enhancement
-- `Qwen/Qwen2.5-VL-7B-Instruct` (detailed analysis)
-- Enable via `reasoning.enabled: true` in project config
-- Model files are cached under `--models_dir`; use `--prefetch-qwen` to download ahead of time
+Model files are cached under `--models_dir`; use `--prefetch-qwen` to download ahead of time
 
 ### Single Model Alternative
 - `openbmb/MiniCPM-V-2_6` (all-in-one option)
@@ -159,10 +161,10 @@ Edit `<project>\meta\project.json` to customize:
 1. **Media Ingestion**: Copy originals to `raw/` folders
 2. **Format Conversion**: Convert to standard formats
 3. **AI Analysis**:
-   - Images: Florence-2 captioning + object detection
+   - Images: Qwen2.5-VL captioning (default) or Florence-2 captioning
    - Videos: First-frame analysis + action tag inference
    - Audio: Speaker diarization + transcript generation
-4. **Optional Enhancement**: Qwen2.5-VL reasoning refinement
+4. **Optional Enhancement**: Florence-2 or Qwen-based refinement depending on selection
 5. **Token Assignment**: Append unique ULID tokens
 6. **Thumbnail Generation**: Create 256px previews
 7. **Logging**: Record all processing steps
@@ -200,7 +202,7 @@ This will test:
 ### Model Download Issues
 ```powershell
 # Pre-download models manually
-python -c "from transformers import AutoProcessor; AutoProcessor.from_pretrained('microsoft/Florence-2-base', trust_remote_code=True)"
+python -c "from transformers import AutoProcessor; AutoProcessor.from_pretrained('Qwen/Qwen2.5-VL-7B-Instruct', trust_remote_code=True)"
 ```
 
 ### CUDA/GPU Issues
@@ -277,8 +279,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 This implementation enhances the original scaffold with:
 
-- **Florence-2 Integration**: Replaced placeholder captioning with actual HuggingFace Florence-2 models
-- **Modular Architecture**: Proper adapter pattern for different AI models  
+- **Qwen2.5-VL Integration**: Primary captioning via Qwen VLM with optional Florence-2 alternative
+- **Modular Architecture**: Proper adapter pattern for different AI models
 - **Enhanced Configuration**: Comprehensive project.json with model selection options
 - **Better Error Handling**: Graceful fallbacks when models aren't available
 - **Comprehensive Testing**: Full smoke test suite and acceptance validation
